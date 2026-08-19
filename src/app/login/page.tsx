@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { createClient } from "@/lib/supabase/client";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, useEffect } from "react";
+import { isLocalMode } from "@/lib/config-browser";
 
 function LoginForm() {
   const [email, setEmail] = useState("");
@@ -17,11 +17,17 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const next = searchParams.get("next") || "/";
 
+  // Modo local: no hay login, entrar directamente
+  useEffect(() => {
+    if (isLocalMode) router.replace(next);
+  }, [next, router]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setInfo(null);
     setLoading(true);
+    const { createClient } = await import("@/lib/supabase/client");
     const supabase = createClient();
 
     if (magic) {

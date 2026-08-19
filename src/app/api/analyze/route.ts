@@ -1,13 +1,14 @@
 import { NextRequest } from "next/server";
 import { ok, fail, requireUser } from "@/lib/api-helpers";
 import { analyzeProductUrl } from "@/lib/scrape/extractor";
+import { store } from "@/lib/store";
 
 export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   const auth = await requireUser();
-  if ("error" in auth) return auth.error;
-  const { supabase, user } = auth;
+  if (auth.error) return auth.error;
+  const { userId } = auth;
 
   let url = "";
   try {
@@ -22,10 +23,9 @@ export async function POST(req: NextRequest) {
   const analysis = await analyzeProductUrl(url);
 
   // Guardar producto
-  const { data: product, error: pErr } = await supabase
-    .from("products")
-    .insert({
-      user_id: user.id,
+  let product;
+  try {
+    product = await store.insertProduct(userId, {
       url: analysis.product.url,
       product_id: analysis.product.product_id || null,
       name: analysis.product.name || null,
@@ -45,17 +45,13 @@ export async function POST(req: NextRequest) {
       raw_analysis: analysis.product,
       extraction_method: analysis.method,
       extraction_status: analysis.success ? "ok" : "partial",
-    })
-    .select()
-    .single();
-
-  if (pErr || !product) {
-    return fail(`No se pudo guardar el producto: ${pErr?.message || "desconocido"}`, 500);
+    });
+  } catch (e: any) {
+    return fail(`No se pudo guardar el producto: ${e?.message || "desconocido"}`, 500);
   }
 
   // Guardar contactos
   const contacts = (analysis.product.contacts || []).map((c) => ({
-    user_id: user.id,
     product_id: product.id,
     company: c.company || null,
     contact_type: c.contact_type,
@@ -67,12 +63,11 @@ export async function POST(req: NextRequest) {
     metadata: c.metadata || {},
   }));
   if (contacts.length) {
-    await supabase.from("contacts").insert(contacts);
+    await store.insertContacts(userId, contacts);
   }
 
   // Guardar fuentes del fabricante
   const sources = (analysis.product.manufacturer_sources || []).map((s) => ({
-    user_id: user.id,
     product_id: product.id,
     manufacturer_name: analysis.product.manufacturer_name || null,
     title: s.title || null,
@@ -82,7 +77,7 @@ export async function POST(req: NextRequest) {
     email: s.email || null,
   }));
   if (sources.length) {
-    await supabase.from("manufacturer_sources").insert(sources);
+    await store.insertSources(userId, sources);
   }
 
   return ok({ product, analysis: analysis.product, success: analysis.success });

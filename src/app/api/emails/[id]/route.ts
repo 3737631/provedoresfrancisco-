@@ -1,24 +1,22 @@
 import { NextRequest } from "next/server";
 import { ok, fail, requireUser } from "@/lib/api-helpers";
+import { store } from "@/lib/store";
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const auth = await requireUser();
-  if ("error" in auth) return auth.error;
-  const { supabase, user } = auth;
+  if (auth.error) return auth.error;
   const { id } = await params;
 
-  const { data, error } = await supabase
-    .from("emails")
-    .select("*, contacts(*), suppliers(*), products(*)")
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (error) return fail(error.message, 500);
-  if (!data) return fail("Email no encontrado", 404);
-  return ok({ email: data });
+  try {
+    const email = await store.getEmail(auth.userId, id);
+    if (!email) return fail("Email no encontrado", 404);
+    return ok({ email });
+  } catch (e: any) {
+    return fail(e.message || "Error", 500);
+  }
 }
 
 export async function PATCH(
@@ -26,8 +24,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const auth = await requireUser();
-  if ("error" in auth) return auth.error;
-  const { supabase, user } = auth;
+  if (auth.error) return auth.error;
   const { id } = await params;
 
   const body = await req.json().catch(() => null);
@@ -40,15 +37,12 @@ export async function PATCH(
   }
   if (Object.keys(updates).length === 0) return fail("Sin campos validos");
 
-  const { data, error } = await supabase
-    .from("emails")
-    .update(updates)
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .select()
-    .single();
-  if (error) return fail(error.message, 500);
-  return ok({ email: data });
+  try {
+    const email = await store.updateEmail(auth.userId, id, updates);
+    return ok({ email });
+  } catch (e: any) {
+    return fail(e.message || "Error", 500);
+  }
 }
 
 export async function DELETE(
@@ -56,15 +50,13 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const auth = await requireUser();
-  if ("error" in auth) return auth.error;
-  const { supabase, user } = auth;
+  if (auth.error) return auth.error;
   const { id } = await params;
 
-  const { error } = await supabase
-    .from("emails")
-    .delete()
-    .eq("id", id)
-    .eq("user_id", user.id);
-  if (error) return fail(error.message, 500);
-  return ok({ ok: true });
+  try {
+    await store.deleteEmail(auth.userId, id);
+    return ok({ ok: true });
+  } catch (e: any) {
+    return fail(e.message || "Error", 500);
+  }
 }

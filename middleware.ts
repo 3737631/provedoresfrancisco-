@@ -1,10 +1,16 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
+import { isLocalMode } from "@/lib/config-browser";
 
 const PUBLIC_PATHS = ["/login"];
 const PUBLIC_API = ["/api/gmail/webhook", "/api/gmail/callback"];
 
 export async function middleware(request: NextRequest) {
+  // Modo local: sin login, todo abierto
+  if (isLocalMode) {
+    return NextResponse.next();
+  }
+
   const { supabaseResponse, user } = await updateSession(request);
   const { pathname } = request.nextUrl;
 

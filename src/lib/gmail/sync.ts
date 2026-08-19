@@ -1,24 +1,13 @@
-import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { getOAuthClient } from "./oauth";
 import { getHistoryMessages, getMessage, listRecentMessages } from "./gmail";
 import { decrypt } from "@/lib/crypto";
 import { analyzeResponse } from "@/lib/email/analysis";
+import { store } from "@/lib/store";
 
 // ============================================================
 //  Sincronizacion de respuestas de proveedores.
 //  Lee SOLO los emails necesarios para detectar respuestas.
 // ============================================================
-
-const sbAdmin = () =>
-  createAdminClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
-
-export function normalizeEmail(e?: string | null): string {
-  if (!e) return "";
-  return e.trim().toLowerCase();
-}
 
 interface AccountRow {
   user_id: string;
@@ -27,16 +16,23 @@ interface AccountRow {
   history_id?: string | null;
 }
 
-async function loadAccounts(): Promise<Array<AccountRow & { tokens: { access_token: string; refresh_token: string } }>> {
-  const { data, error } = await sbAdmin()
-    .from("gmail_accounts")
-    .select("user_id, access_token_enc, refresh_token_enc, history_id");
-  if (error) throw error;
-  return (data || []).map((row) => ({
-    ...row,
+export function normalizeEmail(e?: string | null): string {
+  if (!e) return "";
+  return e.trim().toLowerCase();
+}
+
+async function loadAccounts(): Promise<
+  Array<AccountRow & { tokens: { access_token: string; refresh_token: string } }>
+> {
+  const rows = await store.getAllGmailAccounts();
+  return (rows as any[]).map((row) => ({
+    user_id: String(row.user_id),
+    access_token_enc: String(row.access_token_enc),
+    refresh_token_enc: String(row.refresh_token_enc),
+    history_id: (row.history_id as string | null) ?? null,
     tokens: {
-      access_token: decrypt(row.access_token_enc),
-      refresh_token: decrypt(row.refresh_token_enc),
+      access_token: decrypt(String(row.access_token_enc)),
+      refresh_token: decrypt(String(row.refresh_token_enc)),
     },
   }));
 }
@@ -50,7 +46,9 @@ export async function syncUserInbox(userId: string): Promise<number> {
   return count;
 }
 
-async function syncAccount(acc: AccountRow & { tokens: { access_token: string; refresh_token: string } }) {
+async function syncAccount(
+  acc: AccountRow & { tokens: { access_token: string; refresh_token: string } }
+) {
   const auth = getOAuthClient();
   auth.setCredentials({
     access_token: acc.tokens.access_token,
@@ -71,26 +69,19 @@ async function syncAccount(acc: AccountRow & { tokens: { access_token: string; r
     }
   }
   if (messageIds.length === 0) {
-    // primera vez o fallo de history: leer los recientes
     messageIds = await listRecentMessages(auth, 25);
   }
 
-  // Guardar history id para la proxima vez
   if (newHistoryId) {
-    await sbAdmin()
-      .from("gmail_accounts")
-      .update({ history_id: newHistoryId })
-      .eq("user_id", acc.user_id);
+    await store.updateGmailHistory(acc.user_id, newHistoryId);
   }
 
-  // Cargar contactos/proveedores del usuario
-  const { data: suppliers } = await sbAdmin()
-    .from("suppliers")
-    .select("id, company, contact_email, last_message")
-    .eq("user_id", acc.user_id);
-
-  const emailToSupplier = new Map<string, { id: string; company: string; last_message?: string | null }>();
-  for (const s of suppliers || []) {
+  const suppliers = await store.getAllSuppliersBasic(acc.user_id);
+  const emailToSupplier = new Map<
+    string,
+    { id: string; company: string; last_message?: string | null }
+  >();
+  for (const s of suppliers as any[]) {
     const key = normalizeEmail(s.contact_email);
     if (key) emailToSupplier.set(key, s);
   }
@@ -103,17 +94,11 @@ async function syncAccount(acc: AccountRow & { tokens: { access_token: string; r
       const supplier = emailToSupplier.get(fromKey);
       if (!supplier) continue;
 
-      // evita duplicados
-      const { data: existing } = await sbAdmin()
-        .from("responses")
-        .select("id")
-        .eq("gmail_message_id", msg.id)
-        .maybeSingle();
+      const existing = await store.findResponseByGmailId(acc.user_id, msg.id);
       if (existing) continue;
 
       const analysis = await analyzeResponse(msg.bodyText, supplier.last_message || "");
-      await sbAdmin().from("responses").insert({
-        user_id: acc.user_id,
+      await store.insertResponse(acc.user_id, {
         supplier_id: supplier.id,
         gmail_message_id: msg.id,
         thread_id: msg.threadId,
@@ -127,21 +112,20 @@ async function syncAccount(acc: AccountRow & { tokens: { access_token: string; r
         suggested_reply: analysis.suggested_reply,
       });
 
-      await sbAdmin()
-        .from("suppliers")
-        .update({ status: "respondido", last_message: msg.bodyText.slice(0, 3000) })
-        .eq("id", supplier.id);
+      await store.updateSupplier(acc.user_id, supplier.id, {
+        status: "respondido",
+        last_message: msg.bodyText.slice(0, 3000),
+      });
 
       synced++;
     } catch {
-      // email concreto que falla no debe tumbar el resto
       continue;
     }
   }
   return synced;
 }
 
-// Export util para webhook: sincronizar todos los usuarios
+// Sincronizar todos los usuarios (para webhook / modo local)
 export async function syncAllUsers(): Promise<number> {
   const accounts = await loadAccounts();
   const unique = Array.from(new Set(accounts.map((a) => a.user_id)));

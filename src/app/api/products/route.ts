@@ -1,34 +1,29 @@
 import { NextRequest } from "next/server";
 import { ok, fail, requireUser } from "@/lib/api-helpers";
+import { store } from "@/lib/store";
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   const auth = await requireUser();
-  if ("error" in auth) return auth.error;
-  const { supabase, user } = auth;
+  if (auth.error) return auth.error;
 
-  const { data, error } = await supabase
-    .from("products")
-    .select("*")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(100);
-  if (error) return fail(error.message, 500);
-  return ok({ products: data || [] });
+  try {
+    const products = await store.listProducts(auth.userId);
+    return ok({ products });
+  } catch (e: any) {
+    return fail(e.message || "Error", 500);
+  }
 }
 
 // Creacion manual de producto (cuando la extraccion no es posible)
 export async function POST(req: NextRequest) {
   const auth = await requireUser();
-  if ("error" in auth) return auth.error;
-  const { supabase, user } = auth;
+  if (auth.error) return auth.error;
 
   const body = await req.json().catch(() => null);
   if (!body) return fail("Cuerpo invalido");
 
-  const { data, error } = await supabase
-    .from("products")
-    .insert({
-      user_id: user.id,
+  try {
+    const product = await store.insertProduct(auth.userId, {
       url: body.url || null,
       product_id: body.product_id || null,
       name: body.name || null,
@@ -45,9 +40,9 @@ export async function POST(req: NextRequest) {
       shipping_info: body.shipping_info || null,
       extraction_method: "manual",
       extraction_status: "manual",
-    })
-    .select()
-    .single();
-  if (error) return fail(error.message, 500);
-  return ok({ product: data });
+    });
+    return ok({ product });
+  } catch (e: any) {
+    return fail(e.message || "Error", 500);
+  }
 }

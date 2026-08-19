@@ -4,10 +4,10 @@ import { syncUserInbox } from "@/lib/gmail/sync";
 
 export async function POST(req: NextRequest) {
   const auth = await requireUser();
-  if ("error" in auth) return auth.error;
+  if (auth.error) return auth.error;
 
   try {
-    const count = await syncUserInbox(auth.user.id);
+    const count = await syncUserInbox(auth.userId);
     return NextResponse.json({ synced: count });
   } catch (e) {
     console.error("Sync error", e);

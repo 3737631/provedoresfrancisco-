@@ -1,17 +1,13 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-helpers";
 import { hasGmailConfig } from "@/lib/gmail/oauth";
+import { store } from "@/lib/store";
 
 export async function GET() {
   const auth = await requireUser();
-  if ("error" in auth) return auth.error;
-  const { supabase, user } = auth;
+  if (auth.error) return auth.error;
 
-  const { data } = await supabase
-    .from("gmail_accounts")
-    .select("gmail_user_email, watch_expiration, created_at")
-    .eq("user_id", user.id)
-    .maybeSingle();
+  const data = await store.getGmailAccount(auth.userId);
 
   return NextResponse.json({
     configured: hasGmailConfig(),

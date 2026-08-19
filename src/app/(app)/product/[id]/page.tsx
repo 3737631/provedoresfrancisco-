@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
 import ProductView from "@/components/ProductView";
+import { getCurrentUserInfo } from "@/lib/api-helpers";
+import { store } from "@/lib/store";
 
 export default async function ProductPage({
   params,
@@ -8,33 +9,14 @@ export default async function ProductPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) notFound();
+  const user = await getCurrentUserInfo();
 
-  const { data: product } = await supabase
-    .from("products")
-    .select("*")
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .maybeSingle();
-
+  const { product, contacts, sources } = await store.getProductWithDetails(user.id, id);
   if (!product) notFound();
-
-  const [{ data: contacts }, { data: sources }] = await Promise.all([
-    supabase.from("contacts").select("*").eq("product_id", id).eq("user_id", user.id),
-    supabase
-      .from("manufacturer_sources")
-      .select("*")
-      .eq("product_id", id)
-      .eq("user_id", user.id),
-  ]);
 
   return (
     <div className="space-y-4">
-      <ProductView product={product} contacts={contacts || []} sources={sources || []} />
+      <ProductView product={product} contacts={contacts} sources={sources} />
     </div>
   );
 }

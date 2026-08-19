@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { isLocalMode } from "@/lib/config-browser";
 
 interface Notification {
   id: string;
@@ -19,14 +19,15 @@ export default function Navbar({ userEmail }: { userEmail: string | null }) {
   const router = useRouter();
 
   const refresh = useCallback(async () => {
-    const supabase = createClient();
-    const { data } = await supabase
-      .from("notifications")
-      .select("*")
-      .eq("is_read", false)
-      .order("created_at", { ascending: false })
-      .limit(5);
-    setNotifications(data || []);
+    try {
+      const res = await fetch("/api/notifications");
+      const data = await res.json();
+      setNotifications(
+        (data.notifications || []).filter((n: any) => !n.is_read).slice(0, 5)
+      );
+    } catch {
+      setNotifications([]);
+    }
   }, []);
 
   useEffect(() => {
@@ -77,10 +78,7 @@ export default function Navbar({ userEmail }: { userEmail: string | null }) {
               onClick={() => {
                 setOpen(!open);
                 if (!open) {
-                  createClient()
-                    .from("notifications")
-                    .update({ is_read: true })
-                    .eq("is_read", false)
+                  fetch("/api/notifications", { method: "PATCH" })
                     .then(() => setTimeout(refresh, 500));
                 }
               }}
@@ -130,7 +128,10 @@ export default function Navbar({ userEmail }: { userEmail: string | null }) {
           </div>
           <button
             onClick={async () => {
-              await createClient().auth.signOut();
+              if (!isLocalMode) {
+                const { createClient } = await import("@/lib/supabase/client");
+                await createClient().auth.signOut();
+              }
               router.push("/login");
             }}
             className="text-sm text-slate-500 hover:text-rose-600 px-2 py-1 rounded-lg hover:bg-rose-50"

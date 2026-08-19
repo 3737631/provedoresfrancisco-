@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { ok, fail, requireUser } from "@/lib/api-helpers";
+import { store } from "@/lib/store";
 
 // PATCH /api/suppliers/[id] - actualizar estado, notas, seguimiento
 export async function PATCH(
@@ -7,8 +8,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const auth = await requireUser();
-  if ("error" in auth) return auth.error;
-  const { supabase, user } = auth;
+  if (auth.error) return auth.error;
   const { id } = await params;
 
   const body = await req.json().catch(() => null);
@@ -30,15 +30,12 @@ export async function PATCH(
   }
   if (Object.keys(updates).length === 0) return fail("Sin campos validos");
 
-  const { data, error } = await supabase
-    .from("suppliers")
-    .update(updates)
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .select()
-    .single();
-  if (error) return fail(error.message, 500);
-  return ok({ supplier: data });
+  try {
+    const supplier = await store.updateSupplier(auth.userId, id, updates);
+    return ok({ supplier });
+  } catch (e: any) {
+    return fail(e.message || "Error", 500);
+  }
 }
 
 // DELETE /api/suppliers/[id]
@@ -47,15 +44,13 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const auth = await requireUser();
-  if ("error" in auth) return auth.error;
-  const { supabase, user } = auth;
+  if (auth.error) return auth.error;
   const { id } = await params;
 
-  const { error } = await supabase
-    .from("suppliers")
-    .delete()
-    .eq("id", id)
-    .eq("user_id", user.id);
-  if (error) return fail(error.message, 500);
-  return ok({ ok: true });
+  try {
+    await store.deleteSupplier(auth.userId, id);
+    return ok({ ok: true });
+  } catch (e: any) {
+    return fail(e.message || "Error", 500);
+  }
 }

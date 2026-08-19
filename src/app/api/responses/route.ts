@@ -1,17 +1,14 @@
-import { NextRequest } from "next/server";
 import { ok, fail, requireUser } from "@/lib/api-helpers";
+import { store } from "@/lib/store";
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   const auth = await requireUser();
-  if ("error" in auth) return auth.error;
-  const { supabase, user } = auth;
+  if (auth.error) return auth.error;
 
-  const { data, error } = await supabase
-    .from("responses")
-    .select("*, suppliers(company, product_name)")
-    .eq("user_id", user.id)
-    .order("received_at", { ascending: false })
-    .limit(100);
-  if (error) return fail(error.message, 500);
-  return ok({ responses: data || [] });
+  try {
+    const responses = await store.listResponses(auth.userId);
+    return ok({ responses });
+  } catch (e: any) {
+    return fail(e.message || "Error", 500);
+  }
 }

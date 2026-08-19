@@ -1,36 +1,20 @@
 import { NextRequest } from "next/server";
 import { ok, fail, requireUser } from "@/lib/api-helpers";
+import { store } from "@/lib/store";
 
 export async function GET(
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const auth = await requireUser();
-  if ("error" in auth) return auth.error;
-  const { supabase, user } = auth;
+  if (auth.error) return auth.error;
   const { id } = await params;
 
-  const { data: product, error } = await supabase
-    .from("products")
-    .select("*")
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (error) return fail(error.message, 500);
-  if (!product) return fail("Producto no encontrado", 404);
-
-  const [contacts, sources] = await Promise.all([
-    supabase.from("contacts").select("*").eq("product_id", id).eq("user_id", user.id),
-    supabase
-      .from("manufacturer_sources")
-      .select("*")
-      .eq("product_id", id)
-      .eq("user_id", user.id),
-  ]);
-
-  return ok({
-    product,
-    contacts: contacts.data || [],
-    sources: sources.data || [],
-  });
+  try {
+    const { product, contacts, sources } = await store.getProductWithDetails(auth.userId, id);
+    if (!product) return fail("Producto no encontrado", 404);
+    return ok({ product, contacts, sources });
+  } catch (e: any) {
+    return fail(e.message || "Error", 500);
+  }
 }

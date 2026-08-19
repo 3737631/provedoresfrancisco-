@@ -1,33 +1,28 @@
 import { NextRequest } from "next/server";
 import { ok, fail, requireUser } from "@/lib/api-helpers";
+import { store } from "@/lib/store";
 
 export async function GET() {
   const auth = await requireUser();
-  if ("error" in auth) return auth.error;
-  const { supabase, user } = auth;
+  if (auth.error) return auth.error;
 
-  const { data, error } = await supabase
-    .from("emails")
-    .select("*")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(100);
-  if (error) return fail(error.message, 500);
-  return ok({ emails: data || [] });
+  try {
+    const emails = await store.listEmails(auth.userId);
+    return ok({ emails });
+  } catch (e: any) {
+    return fail(e.message || "Error", 500);
+  }
 }
 
 export async function POST(req: NextRequest) {
   const auth = await requireUser();
-  if ("error" in auth) return auth.error;
-  const { supabase, user } = auth;
+  if (auth.error) return auth.error;
 
   const body = await req.json().catch(() => null);
   if (!body) return fail("Cuerpo invalido");
 
-  const { data, error } = await supabase
-    .from("emails")
-    .insert({
-      user_id: user.id,
+  try {
+    const email = await store.insertEmail(auth.userId, {
       product_id: body.product_id || null,
       contact_id: body.contact_id || null,
       supplier_id: body.supplier_id || null,
@@ -35,9 +30,9 @@ export async function POST(req: NextRequest) {
       subject: body.subject || "",
       body: body.body || "",
       status: "draft",
-    })
-    .select()
-    .single();
-  if (error) return fail(error.message, 500);
-  return ok({ email: data });
+    });
+    return ok({ email });
+  } catch (e: any) {
+    return fail(e.message || "Error", 500);
+  }
 }

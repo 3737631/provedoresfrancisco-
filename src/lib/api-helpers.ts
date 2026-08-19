@@ -1,20 +1,40 @@
 import { NextResponse } from "next/server";
+import { isLocalMode, LOCAL_USER_ID, LOCAL_USER_EMAIL } from "@/lib/config";
+import { initStore } from "@/lib/store";
 import { createClient } from "@/lib/supabase/server";
-import type { User } from "@supabase/supabase-js";
 
-export async function requireUser(): Promise<
-  { user: User; supabase: Awaited<ReturnType<typeof createClient>> } | { error: NextResponse }
-> {
+export type AuthResult =
+  | { userId: string; error?: undefined }
+  | { userId?: undefined; error: NextResponse };
+
+// Devuelve el id del usuario actual.
+//  - Modo local: usuario fijo (LOCAL_USER_ID), sin login.
+//  - Modo nube:  usuario autenticado con Supabase Auth.
+export async function requireUser(): Promise<AuthResult> {
+  if (isLocalMode) {
+    return { userId: LOCAL_USER_ID };
+  }
+
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) {
-    return {
-      error: NextResponse.json({ error: "No autorizado" }, { status: 401 }),
-    };
+    return { error: NextResponse.json({ error: "No autorizado" }, { status: 401 }) };
   }
-  return { user, supabase };
+  await initStore(async () => supabase);
+  return { userId: user.id };
+}
+
+// Info del usuario para el layout (email). Nunca en modo local es el fijo.
+export async function getCurrentUserInfo(): Promise<{ id: string; email: string | null }> {
+  if (isLocalMode) return { id: LOCAL_USER_ID, email: LOCAL_USER_EMAIL };
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  await initStore(async () => supabase);
+  return { id: user?.id ?? LOCAL_USER_ID, email: user?.email ?? null };
 }
 
 export function ok(data: unknown, init?: ResponseInit) {
