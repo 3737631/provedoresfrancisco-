@@ -145,6 +145,32 @@ async function tryBrowser(url: string): Promise<FetchResult | null> {
         });
         if (ready) break;
       }
+
+      // Expandir la seccion de conformidad del producto (puede estar plegada)
+      try {
+        await page.evaluate(() => {
+          const els = Array.from(
+            document.querySelectorAll("div,span,button,h2,h3,h4,section,[role='button']")
+          ) as HTMLElement[];
+          const target = els.find((el) => {
+            const t = (el.textContent || "").trim();
+            return (
+              t.length < 120 &&
+              (t.toLowerCase().includes("información sobre conformidad") ||
+                t.toLowerCase().includes("informacion sobre conformidad") ||
+                t.toLowerCase().includes("product compliance") ||
+                t.toLowerCase().includes("compliance information") ||
+                t.toLowerCase().includes("información del vendedor") ||
+                t.toLowerCase().includes("seller information"))
+            );
+          });
+          if (target) target.click();
+        });
+        await sleep(2500);
+      } catch {
+        // no es critico
+      }
+
       const html = await page.content();
       if (!html || html.length < 400) return null;
       return { html, method: "browser", finalUrl: page.url() };

@@ -210,16 +210,26 @@ function extractComplianceContacts($: cheerio.CheerioAPI): Array<{
     if (legal && legal[1]) company = cleanText(legal[1]);
   }
 
-  // Direccion: texto de la empresa si aparece (linea larga con pais)
+  // Direccion: linea del bloque que contenga la empresa + datos, sin boilerplate
   let address: string | undefined;
   if (company) {
-    const addrLine = lines.find(
-      (l) => l.includes(company.slice(0, 30)) && l.length > company.length + 10 && l.length < 260
+    const addrLine = block.find(
+      (l) =>
+        l.includes(company.slice(0, 30)) &&
+        l.length > company.length + 10 &&
+        l.length < 260 &&
+        !/^(vendido|sold)|log[ií]stica por|^shop/i.test(l)
     );
     if (addrLine) {
       const rest = addrLine.replace(company, "");
-      if (rest.length > 10) address = cleanText(rest).slice(0, 220);
+      if (rest.length > 10 && !/log[ií]stica/i.test(rest)) address = cleanText(rest).slice(0, 220);
     }
+  }
+  if (!address) {
+    const addrMatch =
+      blockText.match(/(?:address|direcci[oó]n|domicilio|registro)[:\s]+([^\n]{10,220})/i) ||
+      blockText.match(/(?:room|floor|building|distrito|street|calle|avenida|shenzhen|guangzhou|ningbo|yiwu|hong kong)\s*[^\n]{4,180}/i);
+    if (addrMatch) address = cleanText(addrMatch[0]).slice(0, 220);
   }
 
   const emails = extractEmails(`${blockText}\n${bodyText}`);
@@ -400,7 +410,29 @@ export function parseAliExpress(html: string, url: string): ExtractedProduct {
     contact_type: "fabricante" as const,
     email: c.email,
     phone: c.phone,
+    address: c.address,
   }));
+
+  // ---- Fabricante / empresa desde la informacion de conformidad ----
+  // La seccion "Informacion sobre conformidad del producto" contiene la
+  // empresa legal detras del producto (vendedor/fabricante/importador).
+  const comp = compliance[0];
+  if (!result.manufacturer_name && comp?.company) {
+    result.manufacturer_name = comp.company;
+  }
+  if (!result.manufacturer_address && comp?.address) {
+    result.manufacturer_address = comp.address;
+  }
+  if (!result.manufacturer_email && comp?.email) {
+    result.manufacturer_email = comp.email;
+  }
+  if (!result.manufacturer_phone && comp?.phone) {
+    result.manufacturer_phone = comp.phone;
+  }
+  const euMatchComp = compliance.find((c) => /responsab|importador|importador en la ue|eu/i.test(c.company || ""));
+  if (!result.eu_responsible && euMatchComp) {
+    result.eu_responsible = euMatchComp.company;
+  }
   // email y telefono globales de la pagina
   const bodyText = htmlToText(stripScripts($.html() || ""));
   const emails = extractEmails(bodyText);
