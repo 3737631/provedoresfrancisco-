@@ -2,6 +2,8 @@ import { NextRequest } from "next/server";
 import { ok, fail, requireUser } from "@/lib/api-helpers";
 import { analyzeProductUrl } from "@/lib/scrape/extractor";
 import { store } from "@/lib/store";
+import { generateEmail, pickBestContact } from "@/lib/email/message-generator";
+import type { Contact } from "@/lib/types";
 
 export const maxDuration = 120;
 
@@ -80,5 +82,45 @@ export async function POST(req: NextRequest) {
     await store.insertSources(userId, sources);
   }
 
-  return ok({ product, analysis: analysis.product, success: analysis.success });
+  // Crear automaticamente el proveedor + mensaje personalizado con el mejor contacto
+  let email_id: string | null = null;
+  const savedContacts = await store.listContactsByProduct(userId, product.id);
+  const best = pickBestContact(savedContacts as Contact[]);
+  if (best) {
+    try {
+      const company = best.company || "Proveedor";
+      const supplier = await store.insertSupplier(userId, {
+        product_id: product.id,
+        contact_id: best.id || null,
+        company,
+        product_name: analysis.product.name || null,
+        contact_email: best.email || null,
+        contact_type: best.contact_type || null,
+        status: "pendiente",
+      });
+      const generated = generateEmail({ ...(best as any), company }, {
+        productName: analysis.product.name || undefined,
+        productUrl: analysis.product.url || undefined,
+      });
+      const emailRow = await store.insertEmail(userId, {
+        product_id: product.id,
+        contact_id: best.id || null,
+        supplier_id: supplier.id,
+        to_email: best.email || null,
+        subject: generated.subject,
+        body: generated.body,
+        status: "draft",
+      });
+      email_id = emailRow.id;
+    } catch {
+      // la generacion automatica del email no es critica
+    }
+  }
+
+  return ok({
+    product,
+    analysis: analysis.product,
+    success: analysis.success,
+    email_id,
+  });
 }

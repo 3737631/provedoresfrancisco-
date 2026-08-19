@@ -107,6 +107,11 @@ export default function EmailReview({ emailId }: { emailId: string }) {
             confirmación.
           </p>
         </div>
+        {email.product_id && (
+          <Link href={`/product/${email.product_id}`} className="btn-secondary mr-2">
+            Ver análisis del producto
+          </Link>
+        )}
         {email.supplier_id && (
           <Link href={`/crm`} className="btn-secondary">
             Ver en CRM

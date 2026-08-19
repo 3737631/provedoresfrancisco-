@@ -1,6 +1,6 @@
 import type { AnalysisResult, ExtractedProduct } from "@/lib/types";
 import { isAliExpressUrl, normalizeUrl, extractAliExpressId } from "@/lib/utils";
-import { fetchPage } from "./fetcher";
+import { fetchPage, fetchRenderedPage } from "./fetcher";
 import { parseAliExpress } from "./aliexpress";
 import { parseGenericPage, makeProductFromGeneric } from "./generic";
 import { searchManufacturer } from "./manufacturer";
@@ -51,6 +51,25 @@ export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult>
   }
   parsed.extraction_method = fetched.method === "jina" ? `${parsed.extraction_method}+jina` : parsed.extraction_method;
 
+  // 2b) AliExpress: si el HTML inicial no trajo vendedor/conformidad (carga
+  //     por JavaScript), renderizar con un navegador real y fusionar.
+  const thinAliExpress =
+    isAliExpressUrl(url) &&
+    !parsed.seller_name &&
+    (!parsed.compliance_contacts || parsed.compliance_contacts.length === 0) &&
+    !parsed.manufacturer_name &&
+    !(parsed.contacts && parsed.contacts.length > 0);
+  if (thinAliExpress) {
+    const rendered = await fetchRenderedPage(url);
+    if (rendered) {
+      const rich = parseAliExpress(rendered.html, rendered.finalUrl || url);
+      mergeParse(parsed, rich);
+      parsed.extraction_method = `${parsed.extraction_method}+browser`;
+      if (!parsed.seller_name && rich.seller_name) parsed.seller_name = rich.seller_name;
+      if (!parsed.seller_store_url && rich.seller_store_url) parsed.seller_store_url = rich.seller_store_url;
+    }
+  }
+
   // 3) Enriquecer con LLM si esta disponible
   let llmData: Awaited<ReturnType<typeof extractProductWithLLM>> | null = null;
   if (fetched.method !== "jina") {
@@ -64,9 +83,10 @@ export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult>
   const manufacturerName =
     parsed.manufacturer_name ||
     parsed.contacts?.find((c) => c.contact_type === "fabricante")?.company;
-  if (manufacturerName && manufacturerName.length > 3 && !isRetailName(manufacturerName)) {
+  const searchName = manufacturerName || parsed.seller_name;
+  if (searchName && searchName.length > 3 && !isRetailName(searchName)) {
     try {
-      const search = await searchManufacturer(manufacturerName);
+      const search = await searchManufacturer(searchName);
       parsed.manufacturer_sources = search.sources;
     } catch {
       // no es critico
@@ -97,6 +117,39 @@ function stripHtml(html: string): string {
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .slice(0, 14000);
+}
+
+// Fusiona un parseo rico (navegador) sobre uno fino, rellenando
+// solo los campos vacios y anadiendo contactos nuevos.
+function mergeParse(target: ExtractedProduct, rich: ExtractedProduct) {
+  const fill = (k: "name" | "price" | "currency" | "shipping_info" | "image_url") => {
+    if (!target[k] && rich[k]) target[k] = rich[k];
+  };
+  fill("name");
+  fill("price");
+  fill("currency");
+  fill("shipping_info");
+  fill("image_url");
+  if (!target.seller_name && rich.seller_name) target.seller_name = rich.seller_name;
+  if (!target.seller_store_url && rich.seller_store_url) target.seller_store_url = rich.seller_store_url;
+  if (!target.manufacturer_name && rich.manufacturer_name) target.manufacturer_name = rich.manufacturer_name;
+  if (!target.manufacturer_email && rich.manufacturer_email) target.manufacturer_email = rich.manufacturer_email;
+  if (!target.manufacturer_phone && rich.manufacturer_phone) target.manufacturer_phone = rich.manufacturer_phone;
+  if (!target.manufacturer_address && rich.manufacturer_address) target.manufacturer_address = rich.manufacturer_address;
+  if (!target.eu_responsible && rich.eu_responsible) target.eu_responsible = rich.eu_responsible;
+  if ((target.variants || []).length === 0 && (rich.variants || []).length > 0) target.variants = rich.variants;
+  if ((target.compliance_contacts || []).length === 0 && (rich.compliance_contacts || []).length > 0) {
+    target.compliance_contacts = rich.compliance_contacts;
+  }
+  for (const c of rich.contacts || []) {
+    const dup = (target.contacts || []).some(
+      (p) => (p.email && p.email === c.email) || (p.company && p.company === c.company && p.contact_type === c.contact_type)
+    );
+    if (!dup) (target.contacts ||= []).push(c);
+  }
+  for (const w of rich.warnings || []) {
+    if (!(target.warnings || []).includes(w)) target.warnings?.push(w);
+  }
 }
 
 function mergeLLM(

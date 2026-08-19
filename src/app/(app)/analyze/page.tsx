@@ -38,7 +38,11 @@ export default function AnalyzePage() {
       }
 
       if (data.success) {
-        router.push(`/product/${data.product.id}`);
+        if (data.email_id) {
+          router.push(`/email/${data.email_id}`);
+        } else {
+          router.push(`/product/${data.product.id}`);
+        }
       } else {
         setStep("manual");
         setWarning(

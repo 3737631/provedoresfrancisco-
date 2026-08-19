@@ -1,6 +1,6 @@
 import * as cheerio from "cheerio";
 import type { ExtractedProduct } from "@/lib/types";
-import { cleanText, extractEmails, extractPhones, extractUrls } from "@/lib/utils";
+import { cleanText, htmlToText, extractEmails, extractPhones, extractUrls } from "@/lib/utils";
 
 // ============================================================
 //  Parser de AliExpress.
@@ -145,9 +145,24 @@ function extractSellerInfo(html: string, $: cheerio.CheerioAPI): { name?: string
     }
   }
 
+  // Fallback por texto: "Vendido por Shop1103847351 Store (Vendedor)"
+  if (!out.name) {
+    const t = htmlToText(stripScripts($.html() || ""));
+    const m =
+      t.match(/vendido\s+por\s*([^\n(]{2,80})/i) ||
+      t.match(/sold\s+by\s*([^\n(]{2,80})/i);
+    if (m && m[1]) {
+      const name = cleanText(m[1]).replace(/\([^)]*\)/g, "").trim();
+      if (name && !/aliexpress$/i.test(name)) out.name = name;
+    }
+  }
+
   if (storeLinks.length && !out.storeUrl) {
     out.storeUrl = storeLinks[0];
   }
+
+  // limpiar sufijos tipo "(Vendedor)" de cualquier fuente
+  if (out.name) out.name = out.name.replace(/\([^)]*\)/g, "").trim();
 
   return out;
 }
@@ -159,62 +174,90 @@ function extractComplianceContacts($: cheerio.CheerioAPI): Array<{
   phone?: string;
 }> {
   const results: Array<{ company?: string; address?: string; email?: string; phone?: string }> = [];
+  const rawHtml = $.html() || "";
 
-  // Texto completo de la pagina (puede contener info de conformidad)
-  const bodyText = cleanText($("body").text());
+  // Texto visible con saltos de linea conservados (sin scripts ni estilos)
+  const bodyText = htmlToText(stripScripts(rawHtml));
+  const lines = bodyText.split(/\n+/).map((l) => l.trim()).filter((l) => l.length > 1);
 
-  // Buscar bloques que mencionen informacion de conformidad / contacto del fabricante
-  const keywords = /conformity|responsible|manufacturer|importer|supplier|company information|contact information|seller information|legal/i;
-  const sections = bodyText.split(/\n+/).filter((line) => line.length > 10);
+  // Localizar la seccion "Informacion sobre conformidad del producto" / "Product compliance information"
+  const headingIdx = lines.findIndex((l) =>
+    /conformidad del producto|product compliance|compliance information|seller information/i.test(l)
+  );
 
-  let current: { company?: string; address?: string; email?: string; phone?: string } | null = null;
-
-  for (const line of sections) {
-    if (keywords.test(line) && line.length < 400) {
-      // Inicio de una posible seccion de contacto
-      if (current) results.push(current);
-      current = {};
-      // extraer email en la misma linea
-      const emails = extractEmails(line);
-      const phones = extractPhones(line);
-      if (emails.length) current.email = emails[0];
-      if (phones.length) current.phone = phones[0];
-      current.company = line.slice(0, 120);
-      continue;
-    }
-    if (current) {
-      const emails = extractEmails(line);
-      const phones = extractPhones(line);
-      if (emails.length) {
-        current.email = emails[0];
-        continue;
-      }
-      if (phones.length) {
-        current.phone = phones[0];
-        continue;
-      }
-      if (/^(https?:\/\/)/i.test(line)) continue;
-      // acumular como posible direccion/compania
-      current.company = current.company ? `${current.company} | ${line.slice(0, 200)}` : line.slice(0, 200);
+  let block: string[] = [];
+  if (headingIdx >= 0) {
+    for (let i = headingIdx + 1; i < lines.length && block.length < 25; i++) {
+      const l = lines[i];
+      if (/^(mensajes|compromiso de aliexpress|pick[ .]?up|envio gratis|devoluciones?|entrega rapida)/i.test(l)) break;
+      if (/^(descargo|aviso legal|en el caso de|si aliexpress|informacion sobre|para mas informacion)/i.test(l)) continue;
+      block.push(l);
     }
   }
-  if (current) results.push(current);
+  const blockText = block.join("\n");
 
-  // Patron clasico de "Contact information" en AliExpress mobile: nombre de empresa + direccion + email
-  const emailBlock = /([A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9 .&\-]{2,80}?(?:Co\.,?\s*Ltd|Corp\.?|Limited|Inc\.?|GmbH|S\.L\.?|Co\.,?\s*Ltd\.?))\s*([^\n]{0,300}?)([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i;
-  const m = emailBlock.exec(bodyText);
-  if (m && m[3]) {
-    const existing = results.some((r) => r.email === m[3]);
-    if (!existing) {
-      results.push({
-        company: m[1],
-        address: cleanText(m[2]).slice(0, 300),
-        email: m[3],
-      });
+  // Empresa: "Vendido por <Tienda> (Vendedor)" (puede estar en dos lineas)
+  const sold =
+    blockText.match(/vendido\s+por\s*([^\n(]{2,80})/i) ||
+    blockText.match(/sold\s+by\s*([^\n(]{2,80})/i);
+  let company = sold && sold[1] ? cleanText(sold[1]).replace(/\([^)]*\)/g, "").trim() : undefined;
+
+  // Razon social (Co., Ltd / Corp / GmbH ...) si no hay "Vendido por"
+  if (!company) {
+    const legal = blockText.match(
+      /([A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9 .&\-]{2,70}(?:Co\.,?\s*Ltd|Corp\.?|Limited|Inc\.?|GmbH|S\.L\.?|S\.A\.?|LTDA))[^\n]{0,160}/i
+    );
+    if (legal && legal[1]) company = cleanText(legal[1]);
+  }
+
+  // Direccion: texto de la empresa si aparece (linea larga con pais)
+  let address: string | undefined;
+  if (company) {
+    const addrLine = lines.find(
+      (l) => l.includes(company.slice(0, 30)) && l.length > company.length + 10 && l.length < 260
+    );
+    if (addrLine) {
+      const rest = addrLine.replace(company, "");
+      if (rest.length > 10) address = cleanText(rest).slice(0, 220);
     }
   }
 
-  return results.slice(0, 5);
+  const emails = extractEmails(`${blockText}\n${bodyText}`);
+  const phones = extractPhones(blockText).filter(plausiblePhone);
+
+  const contact: { company?: string; address?: string; email?: string; phone?: string } = {};
+  if (company) contact.company = company;
+  if (address) contact.address = address;
+  if (emails.length) contact.email = emails[0];
+  if (phones.length) contact.phone = phones[0];
+  if (company || emails.length || phones.length) results.push(contact);
+
+  // Emails que puedan estar en otras partes de la pagina
+  const seenEmails = new Set(emails);
+  for (const e of extractEmails(bodyText)) {
+    if (!seenEmails.has(e)) {
+      seenEmails.add(e);
+      results.push({ email: e });
+    }
+  }
+
+  return results.slice(0, 6);
+}
+
+function stripScripts(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ");
+}
+
+// Un numero de 8-11 digitos sin separadores suele ser el numero de tienda, no un telefono.
+function plausiblePhone(p: string): boolean {
+  const digits = p.replace(/\D/g, "");
+  if (digits.length < 7 || digits.length > 15) return false;
+  if (p.startsWith("+")) return true;
+  // requiere al menos un separador para no confundir con IDs numericos
+  return /[^+\d]/.test(p);
 }
 
 function extractVariants($: cheerio.CheerioAPI): Array<{ name?: string; price?: string }> {
@@ -359,7 +402,7 @@ export function parseAliExpress(html: string, url: string): ExtractedProduct {
     phone: c.phone,
   }));
   // email y telefono globales de la pagina
-  const bodyText = cleanText($("body").text());
+  const bodyText = htmlToText(stripScripts($.html() || ""));
   const emails = extractEmails(bodyText);
   const phones = extractPhones(bodyText);
 
@@ -383,6 +426,15 @@ export function parseAliExpress(html: string, url: string): ExtractedProduct {
   const contacts = [];
   for (const c of compliance) {
     if (c.company || c.email || c.phone) {
+      // si la conformidad solo repite el nombre de la tienda sin email, no duplicar
+      if (
+        !c.email &&
+        c.company &&
+        result.seller_name &&
+        c.company.toLowerCase() === result.seller_name.toLowerCase()
+      ) {
+        continue;
+      }
       contacts.push({
         company: c.company,
         contact_type: "fabricante" as const,
