@@ -13,8 +13,18 @@ import { extractEmails } from "@/lib/utils";
 //  Estrategias: AliExpress (JSON embebido + HTML) -> LLM -> generico
 // ============================================================
 
+// Los enlaces "bundle"/"ssr" de AliExpress (p.ej. /ssr/300000512/BundleDeals...)
+// no tienen nombre de producto; se reescriben a la pagina canonica del item.
+export function normalizeAliExpressUrl(url: string): string {
+  const m = url.match(/productIds?=(\d+)/);
+  if (m && /\/ssr\//i.test(url)) {
+    return `https://es.aliexpress.com/item/${m[1]}.html`;
+  }
+  return url;
+}
+
 export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult> {
-  const url = normalizeUrl(rawUrl);
+  const url = normalizeAliExpressUrl(normalizeUrl(rawUrl));
 
   if (!/^https?:\/\//i.test(url)) {
     return { product: { url }, method: "none", success: false, error: "La URL no es valida." };

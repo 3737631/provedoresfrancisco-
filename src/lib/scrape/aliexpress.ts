@@ -457,6 +457,16 @@ export function parseAliExpress(html: string, url: string): ExtractedProduct {
   // ---- Variantes / precio / envio (fallbacks por selectores) ----
   if (result.price) result.price = cleanPriceText(result.price);
   if (!result.price) result.price = extractPrice($);
+  // Precio desde el JSON-LD del producto en paginas renderizadas por JS
+  // (presente tambien cuando la API interna esta bloqueada).
+  if (!result.price) {
+    const m = html.match(/"priceCurrency":"([A-Z]{3})"\s*,\s*"price":"([\d.,]+)"/);
+    if (m) result.price = `${m[2]} ${m[1]}`;
+    else {
+      const m2 = html.match(/"price":"(\d{1,4}(?:[.,]\d{1,3}){0,2})"/);
+      if (m2) result.price = m2[1];
+    }
+  }
   if (!result.shipping_info) result.shipping_info = extractShipping($);
   if (!result.variants || result.variants.length === 0) result.variants = extractVariants($);
 

@@ -54,7 +54,7 @@ export default function Navbar({ userEmail }: { userEmail: string | null }) {
             <span className="font-extrabold text-xl text-brand-600 tracking-tight">
               Prove<span className="text-slate-800">Dores</span>
             </span>
-            <span className="text-xs text-slate-400 font-medium">Alvaro</span>
+            <span className="text-xs text-slate-400 font-medium">Alvaro joputa</span>
           </Link>
           <div className="hidden md:flex items-center gap-1">
             {links.map((l) => (
