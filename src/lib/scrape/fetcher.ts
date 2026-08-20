@@ -122,7 +122,11 @@ const CANDIDATE_BROWSERS = [
 
 async function tryBrowser(url: string): Promise<FetchResult | null> {
   const executablePath = CANDIDATE_BROWSERS.find((p) => p && fsExists(p));
-  if (!executablePath) return null;
+  if (!executablePath) {
+    console.error("[browser] no executable found");
+    return null;
+  }
+  console.log("[browser] usando:", executablePath);
   try {
     const { default: puppeteer } = await import("puppeteer-core");
     const browser = await puppeteer.launch({
@@ -199,12 +203,16 @@ async function tryBrowser(url: string): Promise<FetchResult | null> {
           break;
         }
       }
+      console.log(
+        `[browser] ok len=${html.length} mtopBodies=${mtopBodies.length} compliance=${!!extra.aliexpress_compliance}`
+      );
 
       return { html, method: "browser", finalUrl: page.url(), ...(Object.keys(extra).length ? { extra } : {}) };
     } finally {
       await browser.close().catch(() => {});
     }
-  } catch {
+  } catch (e: any) {
+    console.error("[browser] fallo:", e?.message || "desconocido");
     return null;
   }
 }
