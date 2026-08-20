@@ -94,6 +94,27 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+async function tryScraperAPI(url: string): Promise<FetchResult | null> {
+  const key = process.env.SCRAPERAPI_KEY;
+  if (!key) return null;
+  try {
+    // ScraperAPI: IP residencial, rotacion de proxies y gestion de captchas.
+    // Plan gratis: ~5.000 creditos/mes. render=true renderiza el JS (precio
+    // del producto via JSON-LD). No se usa sin clave.
+    const target = `https://api.scraperapi.com/?api_key=${key}&url=${encodeURIComponent(url)}&country=es&render=true`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000);
+    const res = await fetch(target, { headers: { "User-Agent": UA }, signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const html = await res.text();
+    if (html.length < 200 || isCaptchaPage(html)) return null;
+    return { html, method: "proxy", finalUrl: url };
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchPage(url: string): Promise<FetchResult | null> {
   // 1) Directo
   const direct = await tryDirect(url);
@@ -103,6 +124,10 @@ export async function fetchPage(url: string): Promise<FetchResult | null> {
   await sleep(1200);
   const direct2 = await tryDirect(url);
   if (direct2) return direct2;
+
+  // 2b) ScraperAPI (IP residencial + captcha handling) si hay clave
+  const proxy = await tryScraperAPI(url);
+  if (proxy) return proxy;
 
   // 3) Jina Reader (proxy de lectura publica)
   const jina = await tryJina(url);
