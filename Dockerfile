@@ -8,12 +8,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ENV BROWSER_PATH=/usr/bin/chromium
-ENV NODE_ENV=production
 WORKDIR /app
 
+# npm ci con devDependencies (necesarias para el build: tailwindcss, typescript).
+# OJO: NODE_ENV=production NO debe estar antes de npm ci o npm omite las devDeps.
 COPY package.json package-lock.json ./
 RUN npm ci
 
+ENV NODE_ENV=production
 COPY . .
 RUN npm run build
 
