@@ -13,7 +13,7 @@ WORKDIR /app
 # npm ci con devDependencies (necesarias para el build: tailwindcss, typescript).
 # OJO: NODE_ENV=production NO debe estar antes de npm ci o npm omite las devDeps.
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --include=dev
 
 ENV NODE_ENV=production
 COPY . .
