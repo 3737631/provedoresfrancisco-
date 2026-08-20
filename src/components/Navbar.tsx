@@ -50,8 +50,11 @@ export default function Navbar({ userEmail }: { userEmail: string | null }) {
     <nav className="bg-white border-b border-slate-200 sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
         <div className="flex items-center gap-6">
-          <Link href="/" className="font-extrabold text-xl text-brand-600 tracking-tight">
-            Alvaro<span className="text-slate-800"> · ProveDores</span>
+          <Link href="/" className="flex items-baseline gap-2">
+            <span className="font-extrabold text-xl text-brand-600 tracking-tight">
+              Prove<span className="text-slate-800">Dores</span>
+            </span>
+            <span className="text-xs text-slate-400 font-medium">Alvaro</span>
           </Link>
           <div className="hidden md:flex items-center gap-1">
             {links.map((l) => (
