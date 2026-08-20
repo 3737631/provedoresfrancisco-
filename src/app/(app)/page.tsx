@@ -1,5 +1,5 @@
-import DashboardClient from "@/app/(app)/dashboard";
+import { redirect } from "next/navigation";
 
 export default function HomePage() {
-  return <DashboardClient />;
+  redirect("/analyze");
 }

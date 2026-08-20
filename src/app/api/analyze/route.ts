@@ -1,8 +1,9 @@
 import { NextRequest } from "next/server";
 import { ok, fail, requireUser } from "@/lib/api-helpers";
 import { analyzeProductUrl } from "@/lib/scrape/extractor";
+import { analyzeMarket, parsePriceToEur } from "@/lib/scrape/market";
 import { store } from "@/lib/store";
-import { generateEmail, pickBestContact } from "@/lib/email/message-generator";
+import { generateEmail, generateBody, generateSubject, pickBestContact } from "@/lib/email/message-generator";
 import type { Contact } from "@/lib/types";
 
 export const maxDuration = 120;
@@ -84,6 +85,7 @@ export async function POST(req: NextRequest) {
 
   // Crear automaticamente el proveedor + mensaje personalizado con el mejor contacto
   let email_id: string | null = null;
+  let emailData: { to_email: string | null; to_company: string | null; subject: string; body: string } | null = null;
   const savedContacts = await store.listContactsByProduct(userId, product.id);
   const best = pickBestContact(savedContacts as Contact[]);
   if (best) {
@@ -113,9 +115,36 @@ export async function POST(req: NextRequest) {
         status: "draft",
       });
       email_id = emailRow.id;
+      emailData = {
+        to_email: best.email || null,
+        to_company: company,
+        subject: generated.subject,
+        body: generated.body,
+      };
     } catch {
       // la generacion automatica del email no es critica
     }
+  }
+  if (!emailData) {
+    emailData = {
+      to_email: best?.email || null,
+      to_company: best?.company || null,
+      subject: generateSubject(analysis.product.name || undefined),
+      body: generateBody({
+        productName: analysis.product.name || undefined,
+        productUrl: analysis.product.url || undefined,
+        companyName: best?.company,
+      }),
+    };
+  }
+
+  // Analisis de mercado: beneficio estimado y competencia
+  const costPrice = parsePriceToEur(analysis.product.price);
+  let market = null;
+  try {
+    market = await analyzeMarket(analysis.product.name || "", costPrice);
+  } catch {
+    market = null;
   }
 
   return ok({
@@ -123,5 +152,7 @@ export async function POST(req: NextRequest) {
     analysis: analysis.product,
     success: analysis.success,
     email_id,
+    email: emailData,
+    market,
   });
 }

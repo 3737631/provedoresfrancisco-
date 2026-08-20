@@ -1,0 +1,9 @@
+node_modules
+.next
+data
+.git
+.gitignore
+*.md
+scripts
+supabase
+public/logo*
