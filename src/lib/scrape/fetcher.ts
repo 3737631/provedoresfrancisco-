@@ -19,6 +19,21 @@ interface FetchResult {
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
+// Detecta paginas de captcha de forma segura: mirando el TITULO (las paginas
+// de captcha de AliExpress se llaman "CAPTCHA Verification") y, en paginas muy
+// pequenas, por marcadores. NO se descartan paginas grandes: la pagina real del
+// producto (250-400KB) contiene "captcha"/"verify"/"punish" en su codigo JS.
+export function isCaptchaPage(html: string): boolean {
+  const title = (
+    html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] ||
+    html.match(/og:title[^>]*content="([^"]+)"/i)?.[1] ||
+    ""
+  ).toLowerCase();
+  if (/captcha|verify|just a moment|unusual traffic|punish/i.test(title)) return true;
+  if (html.length < 30000 && /captcha|verify|unusual traffic|punish/i.test(html)) return true;
+  return false;
+}
+
 async function tryDirect(url: string): Promise<FetchResult | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
@@ -43,13 +58,7 @@ async function tryDirect(url: string): Promise<FetchResult | null> {
     }
     const html = await res.text();
     if (html.length < 200) return null;
-    if (
-      /captcha|verify|captcha verification|just a moment|enable javascript|unusual traffic|denied|punish|anomalous/i.test(
-        html
-      )
-    ) {
-      return null;
-    }
+    if (isCaptchaPage(html)) return null;
     return { html, method: "direct", finalUrl: res.url };
   } catch {
     return null;
