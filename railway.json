@@ -5,7 +5,6 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "npm run start -- -p ${PORT:-3000}",
     "healthcheckPath": "/",
     "healthcheckTimeout": 120,
     "restartPolicyType": "ON_FAILURE",
