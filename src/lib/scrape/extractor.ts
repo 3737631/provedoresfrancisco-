@@ -120,17 +120,14 @@ export async function analyzeProductHtml(
     applyAliExpressCompliancePopup(parsed, fetched.extra.aliexpress_compliance);
   }
 
-  // 2b) AliExpress: si el HTML inicial no trajo vendedor/conformidad (carga
-  //     por JavaScript), renderizar con un navegador real y fusionar.
-  //     (No se hace en modo draft: el HTML ya viene renderizado.)
-  const thinAliExpress =
+  // 2b) AliExpress: la pagina carga datos por JavaScript (nombre/precio/seller
+//     via JSON-LD). Para que "pegar enlace y analizar" funcione siempre,
+//     renderizar con un navegador real y fusionar cuando falte precio o nombre.
+  const needsBrowser =
     method !== "draft" &&
     isAliExpressUrl(url) &&
-    !parsed.seller_name &&
-    (!parsed.compliance_contacts || parsed.compliance_contacts.length === 0) &&
-    !parsed.manufacturer_name &&
-    !(parsed.contacts && parsed.contacts.length > 0);
-  if (thinAliExpress) {
+    (!parsed.price || !parsed.name);
+  if (needsBrowser) {
     const rendered = await fetchRenderedPage(url);
     if (rendered) {
       const rich = parseAliExpress(rendered.html, rendered.finalUrl || url);
