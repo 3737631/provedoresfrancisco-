@@ -57,9 +57,8 @@ export default function AnalyzePage() {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AnalyzeData | null>(null);
 
-  async function handleAnalyze(e: React.FormEvent) {
-    e.preventDefault();
-    if (!url.trim() || loading) return;
+  async function run(urlInput: string) {
+    if (!urlInput.trim() || loading) return;
     setLoading(true);
     setError(null);
     setData(null);
@@ -67,7 +66,7 @@ export default function AnalyzePage() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url: urlInput }),
       });
       const d = await res.json();
       if (!res.ok) {
@@ -87,6 +86,26 @@ export default function AnalyzePage() {
       setLoading(false);
     }
   }
+
+  async function handleAnalyze(e: React.FormEvent) {
+    e.preventDefault();
+    await run(url);
+  }
+
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get("url");
+    if (q) {
+      setUrl(q);
+      void run(q);
+    }
+  }, []);
+
+  // Boton de captura: se arrastra a la barra de favoritos y se pulsa dentro
+  // del producto de AliExpress. Usa TU navegador (no bloqueado por captcha),
+  // captura la informacion de conformidad y te devuelve aqui con todo.
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const token = process.env.NEXT_PUBLIC_CAPTURE_TOKEN || "provedores";
+  const bookmarklet = `javascript:(()=>{const u=location.href;const t='${token}',o='${origin}';const f=[...document.querySelectorAll('button,div,a,span')].find(e=>{const x=(e.textContent||'').trim();return x&&x.length<80&&/conformidad|compliance/i.test(x)});const go=()=>fetch(o+'/api/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:u,html:document.documentElement.outerHTML,token:t})}).then(r=>r.json()).then(d=>{d.ok?location.href=o+'/analyze?url='+encodeURIComponent(u):alert('Error: '+(d.error||'no ok'))}).catch(e=>alert('Error de red: '+e));f?(f.click(),setTimeout(go,3000)):go()})();`;
 
   const a = data?.analysis;
   const email = data?.email;
@@ -198,11 +217,39 @@ export default function AnalyzePage() {
                   ))}
               </div>
             ) : (
-              <div className="bg-white/10 rounded-xl p-4 text-sm">
-                No se encontró email del fabricante.
-                {a.seller_name && (
-                  <div className="mt-1 font-medium">{a.seller_name} (vía mensaje de AliExpress)</div>
-                )}
+              <div className="bg-white/10 rounded-xl p-4 text-sm space-y-3">
+                <div>
+                  No se encontró email del fabricante.
+                  {a.seller_name && (
+                    <div className="mt-1 font-medium">
+                      {a.seller_name} (vía mensaje de AliExpress)
+                    </div>
+                  )}
+                </div>
+                <div className="text-xs text-white/80">
+                  AliExpress bloquea a la app cuando corre desde internet
+                  (te muestra la página sin fabricante y pone captcha). Desde tu
+                  ordenador sí funciona. Para obtener el fabricante desde aquí en
+                  1 clic, usa TU navegador (no está bloqueado):
+                </div>
+                <ol className="text-xs text-white/90 list-decimal list-inside space-y-1">
+                  <li>
+                    Arrastra este botón a tu barra de favoritos:{" "}
+                    <a
+                      href={bookmarklet}
+                      className="inline-block bg-white text-brand-700 font-bold px-2 py-1 rounded text-xs no-underline"
+                      title="ProveDores: capturar fabricante"
+                    >
+                      ★ ProveDores
+                    </a>
+                  </li>
+                  <li>
+                    Abre el producto de AliExpress en otra pestaña y baja hasta
+                    «Información sobre conformidad del producto».
+                  </li>
+                  <li>Pulsa tu botón ★ ProveDores en la barra.</li>
+                  <li>Te devuelve aquí con el fabricante y el email listos.</li>
+                </ol>
               </div>
             )}
           </section>

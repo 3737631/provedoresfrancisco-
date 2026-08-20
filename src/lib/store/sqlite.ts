@@ -145,6 +145,11 @@ function migrate(d: DatabaseSync) {
       is_read INTEGER DEFAULT 0,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS captures (
+      url TEXT PRIMARY KEY,
+      html TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
 
   // Migracion: columna to_company en emails (bases ya creadas)

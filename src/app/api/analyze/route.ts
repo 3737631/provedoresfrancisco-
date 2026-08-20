@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { ok, fail, requireUser } from "@/lib/api-helpers";
-import { analyzeProductUrl, analyzeProductHtml } from "@/lib/scrape/extractor";
+import { analyzeProductUrl, analyzeProductHtml, normalizeAliExpressUrl } from "@/lib/scrape/extractor";
 import { analyzeMarket, parsePriceToEur } from "@/lib/scrape/market";
 import { store } from "@/lib/store";
 import { generateEmail, generateBody, generateSubject, pickBestContact } from "@/lib/email/message-generator";
@@ -41,6 +41,31 @@ export async function POST(req: NextRequest) {
   const analysis = html
     ? await analyzeProductHtml(html, url, { method: "draft" })
     : await analyzeProductUrl(url);
+
+  // AliExpress da a los servidores una pagina "light" sin la informacion de
+  // conformidad. Si falta el fabricante, usar la captura que hizo el usuario
+  // con el boton de favoritos (su navegador, que no esta bloqueado).
+  if (!analysis.product.manufacturer_name && !analysis.product.seller_name) {
+    try {
+      const key = normalizeAliExpressUrl(url) || url;
+      const capturedHtml = await store.getCapture(key);
+      if (capturedHtml) {
+        const merged = await analyzeProductHtml(capturedHtml, url, { method: "draft" });
+        for (const k of Object.keys(merged.product) as (keyof typeof merged.product)[]) {
+          const v = merged.product[k];
+          if (v === undefined || v === null || (Array.isArray(v) && v.length === 0) || v === "") continue;
+          const cur = analysis.product[k];
+          if (cur === undefined || cur === null || (Array.isArray(cur) && cur.length === 0) || cur === "") {
+            (analysis.product as unknown as Record<string, unknown>)[k] = v;
+          }
+        }
+        analysis.method = `${analysis.method}+captura`;
+        analysis.success = true;
+      }
+    } catch {
+      // la captura es opcional
+    }
+  }
 
   // Guardar producto
   let product;

@@ -643,6 +643,28 @@ export const store = {
     const notifications = localDb.raw("SELECT id, is_read, title, body, created_at FROM notifications WHERE user_id = ? AND is_read = 0 ORDER BY created_at DESC LIMIT 5", userId);
     return buildStats(products, contacts, emails, suppliers, responses, notifications);
   },
+// ================== CAPTURAS (bookmarklet) ==================
+  async saveCapture(url: string, html: string): Promise<void> {
+    if (isLocalMode) {
+      localDb.rawRun(
+        "INSERT INTO captures (url, html, created_at) VALUES (?, ?, ?) ON CONFLICT(url) DO UPDATE SET html = excluded.html, created_at = excluded.created_at",
+        url, html, new Date().toISOString()
+      );
+      return;
+    }
+    const sb = await supabaseOrThrow();
+    await sb.from("captures").upsert({ url, html, created_at: new Date().toISOString() });
+  },
+
+  async getCapture(url: string): Promise<string | null> {
+    if (isLocalMode) {
+      const row = localDb.raw("SELECT html FROM captures WHERE url = ?", url)[0];
+      return row ? (row.html as string) : null;
+    }
+    const sb = await supabaseOrThrow();
+    const { data } = await sb.from("captures").select("html").eq("url", url).maybeSingle();
+    return data?.html ? (data.html as string) : null;
+  },
 };
 
 function buildStats(

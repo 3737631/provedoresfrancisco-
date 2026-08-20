@@ -120,10 +120,15 @@ export async function analyzeProductHtml(
     applyAliExpressCompliancePopup(parsed, fetched.extra.aliexpress_compliance);
   }
 
-  // 2b) AliExpress: renderizar con navegador SOLO si ni siquiera salio el nombre
-  //     (el render tarda ~1 min y AliExpress suele bloquearlo desde servidores).
-  //     El precio via navegador se evita para que el analisis sea rapido.
-  const needsBrowser = method !== "draft" && isAliExpressUrl(url) && !parsed.name;
+  // 2b) AliExpress: la pagina carga datos por JavaScript (nombre/precio/seller
+//     via JSON-LD) y la informacion de conformidad (fabricante, email, direccion,
+//     responsable UE) sale al pinchar "Informacion sobre conformidad del producto"
+//     (llamada mtop). Para replicar ese click, renderizar con un navegador real
+//     cuando falte precio, vendedor o fabricante. Tiempo acotado en fetchRenderedPage.
+  const needsBrowser =
+    method !== "draft" &&
+    isAliExpressUrl(url) &&
+    (!parsed.price || !parsed.seller_name || !parsed.manufacturer_name);
   if (needsBrowser) {
     const rendered = await fetchRenderedPage(url);
     if (rendered) {
