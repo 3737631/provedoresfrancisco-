@@ -36,7 +36,7 @@ export function isCaptchaPage(html: string): boolean {
 
 async function tryDirect(url: string): Promise<FetchResult | null> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20000);
+  const timer = setTimeout(() => controller.abort(), 10000);
   try {
     const res = await fetch(url, {
       headers: {
@@ -77,7 +77,7 @@ async function tryJina(url: string): Promise<FetchResult | null> {
   if (key) headers["Authorization"] = `Bearer ${key}`;
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000);
+    const timer = setTimeout(() => controller.abort(), 12000);
     const res = await fetch(target, { headers, signal: controller.signal });
     clearTimeout(timer);
     if (!res.ok) return null;
@@ -103,7 +103,7 @@ async function tryScraperAPI(url: string): Promise<FetchResult | null> {
     // del producto via JSON-LD). No se usa sin clave.
     const target = `https://api.scraperapi.com/?api_key=${key}&url=${encodeURIComponent(url)}&country=es&render=true`;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 60000);
+    const timer = setTimeout(() => controller.abort(), 20000);
     const res = await fetch(target, { headers: { "User-Agent": UA }, signal: controller.signal });
     clearTimeout(timer);
     if (!res.ok) return null;
@@ -116,16 +116,21 @@ async function tryScraperAPI(url: string): Promise<FetchResult | null> {
 }
 
 export async function fetchPage(url: string): Promise<FetchResult | null> {
-  // 1) Directo
+  // 1) Directo (2 intentos rapidos)
   const direct = await tryDirect(url);
   if (direct) return direct;
-
-  // 2) Vuelta a intentar con espera (algunos sitios bloquean la 1a request)
   await sleep(400);
   const direct2 = await tryDirect(url);
   if (direct2) return direct2;
 
-  // 2b) ScraperAPI (IP residencial + captcha handling) si hay clave
+  // Para AliExpress, el proxy de pago/Jina no aportan (el bloqueo es por IP):
+  // ir directo al navegador y acotar el tiempo total.
+  if (isAliExpressDomain(url)) {
+    const browser = await tryBrowser(url);
+    return browser;
+  }
+
+  // 2b) ScraperAPI (IP rotatoria) si hay clave
   const proxy = await tryScraperAPI(url);
   if (proxy) return proxy;
 
@@ -138,6 +143,10 @@ export async function fetchPage(url: string): Promise<FetchResult | null> {
   if (browser) return browser;
 
   return null;
+}
+
+function isAliExpressDomain(url: string): boolean {
+  return /aliexpress\.(com|us|es|de|fr|it|nl|pl|ru|co\.uk|pt|jp|kr)/i.test(url);
 }
 
 // Renderiza la pagina con un navegador real (Edge/Chrome instalado).
@@ -188,11 +197,11 @@ async function tryBrowser(url: string): Promise<FetchResult | null> {
       });
 
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 60000);
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+      const timer = setTimeout(() => controller.abort(), 30000);
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
       clearTimeout(timer);
-      // Esperar a que el contenido se renderice (hasta 30s)
-      for (let i = 0; i < 30; i++) {
+      // Esperar a que el contenido se renderice (hasta 10s)
+      for (let i = 0; i < 10; i++) {
         await sleep(1000);
         const ready = await page.evaluate(() => {
           const t = (document.body ? document.body.innerText : "") || "";
