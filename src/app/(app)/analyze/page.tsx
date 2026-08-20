@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import CopyButton from "@/components/CopyButton";
 
 interface MarketResult {
@@ -55,6 +55,23 @@ export default function AnalyzePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AnalyzeData | null>(null);
+  const [origin, setOrigin] = useState("");
+
+  useEffect(() => {
+    setOrigin(window.location.origin);
+  }, []);
+
+  // Boton de captura (bookmarklet): se pincha en la barra de marcadores, se abre
+  // el producto de AliExpress delante del cliente y el boton envia el HTML
+  // (cargado con la IP del usuario, sin captcha) a esta misma web.
+  const bookmarkletHref =
+    origin &&
+    `javascript:(function(){var u=location.href,h=document.documentElement.outerHTML,o=${JSON.stringify(origin)};fetch(o+"/api/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:u,html:h})}).then(function(r){return r.json()}).then(function(d){if(d&&d.product&&d.product.id){location.href=o+"/product/"+d.product.id}else{alert("No se pudo extraer el producto")}}).catch(function(){alert("Error de red")})})();`;
+
+  function openProduct() {
+    if (!url.trim()) return;
+    window.open(url.trim(), "_blank");
+  }
 
   async function handleAnalyze(e: React.FormEvent) {
     e.preventDefault();
@@ -118,6 +135,14 @@ export default function AnalyzePage() {
           >
             {loading ? "Analizando…" : "Analizar"}
           </button>
+          <button
+            type="button"
+            onClick={openProduct}
+            disabled={!url.trim()}
+            className="btn whitespace-nowrap justify-center"
+          >
+            Abrir producto
+          </button>
         </div>
         {loading && (
           <div className="mt-4 flex items-center gap-3 text-sm text-slate-500">
@@ -127,6 +152,26 @@ export default function AnalyzePage() {
         )}
         {error && <div className="mt-4 text-sm text-rose-600">{error}</div>}
       </form>
+
+      {bookmarkletHref && (
+        <section className="card p-5 bg-brand-50 border-brand-200">
+          <h2 className="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">
+            Botón de captura (cuando AliExpress bloquea el análisis)
+          </h2>
+          <p className="text-sm text-slate-600">
+            Añade este botón a la barra de marcadores de tu navegador (arrástralo o
+            pínchalo con el botón derecho). Abre el producto de AliExpress delante
+            del cliente y pulsa el botón: te abre aquí mismo el análisis con sus
+            datos.
+          </p>
+          <a
+            href={bookmarkletHref}
+            className="inline-flex items-center gap-2 mt-3 px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700"
+          >
+            ⭐ Capturar producto
+          </a>
+        </section>
+      )}
 
       {a && (
         <div className="space-y-5">

@@ -81,34 +81,57 @@ export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult>
     return { product, method: "blocked", success: false, error: msg };
   }
 
+  return analyzeProductHtml(fetched.html, url, fetched, product);
+}
+
+// Analiza el HTML de una pagina ya descargada (util cuando el navegador del
+// cliente entrega el HTML, p.ej. el boton de captura: la pagina se abre en el
+// dispositivo del usuario, se carga con su IP residencial y se envia aqui).
+export async function analyzeProductHtml(
+  html: string,
+  rawUrl: string,
+  fetched?: { method: string; extra?: Record<string, string> } | null,
+  product?: ExtractedProduct
+): Promise<AnalysisResult> {
+  const url = normalizeAliExpressUrl(normalizeUrl(rawUrl));
+  const method = fetched?.method || "draft";
+  const p: ExtractedProduct = product || {
+    url,
+    product_id: extractAliExpressId(url) || undefined,
+    extraction_method: isAliExpressUrl(url) ? "aliexpress" : "generic",
+    warnings: [],
+  };
+
   // 2) Parsear segun la plataforma
   let parsed: ExtractedProduct;
-  const parseUrl = fetched.finalUrl || fetchUrl;
   if (isAliExpressUrl(url)) {
-    parsed = parseAliExpress(fetched.html, parseUrl);
+    parsed = parseAliExpress(html, url);
   } else {
-    const generic = parseGenericPage(fetched.html, parseUrl);
-    parsed = makeProductFromGeneric(parseUrl, generic);
+    const generic = parseGenericPage(html, url);
+    parsed = makeProductFromGeneric(url, generic);
   }
-  parsed.extraction_method = fetched.method === "jina" ? `${parsed.extraction_method}+jina` : parsed.extraction_method;
+  parsed.extraction_method =
+    method === "jina" ? `${parsed.extraction_method}+jina` : parsed.extraction_method;
 
   // 2a) AliExpress: la informacion de conformidad (fabricante, email,
   //     direccion, responsable UE) llega por la API mtop capturada por el
   //     navegador; aplicarla sobre el resultado.
-  if (isAliExpressUrl(url) && fetched.extra?.aliexpress_compliance) {
+  if (isAliExpressUrl(url) && fetched?.extra?.aliexpress_compliance) {
     applyAliExpressCompliancePopup(parsed, fetched.extra.aliexpress_compliance);
   }
 
   // 2b) AliExpress: si el HTML inicial no trajo vendedor/conformidad (carga
   //     por JavaScript), renderizar con un navegador real y fusionar.
+  //     (No se hace en modo draft: el HTML ya viene renderizado.)
   const thinAliExpress =
+    method !== "draft" &&
     isAliExpressUrl(url) &&
     !parsed.seller_name &&
     (!parsed.compliance_contacts || parsed.compliance_contacts.length === 0) &&
     !parsed.manufacturer_name &&
     !(parsed.contacts && parsed.contacts.length > 0);
   if (thinAliExpress) {
-    const rendered = await fetchRenderedPage(fetchUrl);
+    const rendered = await fetchRenderedPage(url);
     if (rendered) {
       const rich = parseAliExpress(rendered.html, rendered.finalUrl || url);
       if (rendered.extra?.aliexpress_compliance) {
@@ -123,8 +146,8 @@ export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult>
 
   // 3) Enriquecer con LLM si esta disponible
   let llmData: Awaited<ReturnType<typeof extractProductWithLLM>> | null = null;
-  if (fetched.method !== "jina") {
-    llmData = await extractProductWithLLM(stripHtml(fetched.html), url);
+  if (method !== "jina") {
+    llmData = await extractProductWithLLM(stripHtml(html), url);
     if (llmData) {
       mergeLLM(parsed, llmData);
     }
@@ -173,13 +196,13 @@ export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult>
       (parsed.contacts?.length ?? 0) > 0
   );
   if (!hasData) {
-    product.warnings?.push(
+    p.warnings?.push(
       "No se pudo extraer informacion del producto. Puedes copiar la informacion manualmente."
     );
     parsed.extraction_method = "manual";
   }
 
-  return { product: parsed, method: fetched.method, success: hasData };
+  return { product: parsed, method, success: hasData };
 }
 
 function stripHtml(html: string): string {

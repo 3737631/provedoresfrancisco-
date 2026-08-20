@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { ok, fail, requireUser } from "@/lib/api-helpers";
-import { analyzeProductUrl } from "@/lib/scrape/extractor";
+import { analyzeProductUrl, analyzeProductHtml } from "@/lib/scrape/extractor";
 import { analyzeMarket, parsePriceToEur } from "@/lib/scrape/market";
 import { store } from "@/lib/store";
 import { generateEmail, generateBody, generateSubject, pickBestContact } from "@/lib/email/message-generator";
@@ -8,22 +8,39 @@ import type { Contact } from "@/lib/types";
 
 export const maxDuration = 120;
 
+const CORS_HEADERS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Max-Age": "86400",
+};
+
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
+
 export async function POST(req: NextRequest) {
   const auth = await requireUser();
   if (auth.error) return auth.error;
   const { userId } = auth;
 
   let url = "";
+  let html: string | undefined;
   try {
     const body = await req.json();
     url = (body.url || "").toString();
+    html = body.html ? body.html.toString() : undefined;
   } catch {
     return fail("Cuerpo invalido");
   }
   if (!url) return fail("Falta la URL del producto");
   if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
 
-  const analysis = await analyzeProductUrl(url);
+  // Si llega el HTML de la pagina (captura desde el navegador del cliente),
+  // analizar ese HTML directamente; si no, descargar la pagina (best-effort).
+  const analysis = html
+    ? await analyzeProductHtml(html, url, { method: "draft" })
+    : await analyzeProductUrl(url);
 
   // Guardar producto
   let product;
@@ -147,12 +164,15 @@ export async function POST(req: NextRequest) {
     market = null;
   }
 
-  return ok({
-    product,
-    analysis: analysis.product,
-    success: analysis.success,
-    email_id,
-    email: emailData,
-    market,
-  });
+  return ok(
+    {
+      product,
+      analysis: analysis.product,
+      success: analysis.success,
+      email_id,
+      email: emailData,
+      market,
+    },
+    { headers: CORS_HEADERS }
+  );
 }
