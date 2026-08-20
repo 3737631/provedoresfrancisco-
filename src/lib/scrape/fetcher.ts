@@ -43,7 +43,11 @@ async function tryDirect(url: string): Promise<FetchResult | null> {
     }
     const html = await res.text();
     if (html.length < 200) return null;
-    if (html.includes("captcha") || html.includes("verify") || html.includes("Enable JavaScript and cookies")) {
+    if (
+      /captcha|verify|captcha verification|just a moment|enable javascript|unusual traffic|denied|punish|anomalous/i.test(
+        html
+      )
+    ) {
       return null;
     }
     return { html, method: "direct", finalUrl: res.url };

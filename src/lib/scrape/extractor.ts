@@ -64,6 +64,10 @@ export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult>
   const candidates = isAliExpressUrl(url) ? [url, ...aliExpressAlternates(url)] : [url];
   for (const u of candidates) {
     fetched = await fetchPage(u);
+    if (fetched && /captcha|verify|unusual traffic|punish|anomalous/i.test(fetched.html)) {
+      fetched = null;
+      continue;
+    }
     if (fetched) {
       fetchUrl = u;
       break;
