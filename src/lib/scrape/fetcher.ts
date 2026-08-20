@@ -206,6 +206,14 @@ async function tryBrowser(url: string): Promise<FetchResult | null> {
       console.log(
         `[browser] ok len=${html.length} mtopBodies=${mtopBodies.length} compliance=${!!extra.aliexpress_compliance}`
       );
+      if (mtopBodies.length && !extra.aliexpress_compliance) {
+        console.log(
+          "[browser] mtop muestra:",
+          mtopBodies[0].slice(0, 300).replace(/[\n\t]/g, " ")
+        );
+        const popIds = mtopBodies[0].match(/"popId":"([^"]+)"/g) || [];
+        console.log("[browser] popIds:", [...new Set(popIds)].slice(0, 10).join(", "));
+      }
 
       return { html, method: "browser", finalUrl: page.url(), ...(Object.keys(extra).length ? { extra } : {}) };
     } finally {
