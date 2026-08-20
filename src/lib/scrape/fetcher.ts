@@ -214,6 +214,10 @@ async function tryBrowser(url: string): Promise<FetchResult | null> {
         const popIds = mtopBodies[0].match(/"popId":"([^"]+)"/g) || [];
         console.log("[browser] popIds:", [...new Set(popIds)].slice(0, 10).join(", "));
       }
+      const pageText = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 500);
+      console.log(
+        `[browser] pageText: ${pageText}`
+      );
 
       return { html, method: "browser", finalUrl: page.url(), ...(Object.keys(extra).length ? { extra } : {}) };
     } finally {
