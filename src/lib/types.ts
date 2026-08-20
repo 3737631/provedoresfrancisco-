@@ -6,6 +6,14 @@ export type ContactType = "fabricante" | "proveedor" | "vendedor" | "eu_responsi
 
 export type Confidence = "alta" | "media" | "baja";
 
+// Una fuente de datos usada para obtener la informacion del producto.
+export interface DataSource {
+  type: string; // pagina_aliexpress | conformidad_aliexpress | api_producto | busqueda_web | busqueda_fabricante | captura_navegador
+  url?: string;
+  title?: string;
+  confidence: Confidence;
+}
+
 export interface Contact {
   id?: string;
   company?: string;
@@ -35,6 +43,9 @@ export interface ExtractedProduct {
   image_url?: string;
   seller_name?: string;
   seller_store_url?: string;
+  seller_email?: string;
+  seller_phone?: string;
+  seller_address?: string;
   manufacturer_name?: string;
   manufacturer_address?: string;
   manufacturer_email?: string;
@@ -50,6 +61,55 @@ export interface ExtractedProduct {
   raw_html?: string;
   extraction_method?: string;
   warnings?: string[];
+  // Fuentes de datos usadas y nivel de confianza por campo
+  brand?: string;
+  country?: string;
+  manufacturer_verified?: boolean;
+  manufacturer_confidence?: Confidence;
+  compliance_text?: string;
+  source_log?: DataSource[];
+}
+
+// Informe estructurado que recibe el frontend. Diferencia vendedor/marca/fabricante
+// y marca si el fabricante esta verificado o no (nunca se presenta una inferencia
+// como dato confirmado).
+export interface ProductReport {
+  success: boolean;
+  url: string;
+  product_id?: string;
+  title?: string;
+  image_url?: string;
+  price?: string;
+  currency?: string;
+  store?: string;
+  seller: {
+    name?: string;
+    email?: string;
+    store_url?: string;
+    confidence: Confidence;
+  };
+  brand: {
+    name?: string;
+    confidence: Confidence;
+  };
+  manufacturer: {
+    name?: string;
+    legal_name?: string;
+    email?: string;
+    address?: string;
+    country?: string;
+    phone?: string;
+    verified: boolean;
+    confidence: Confidence;
+  };
+  compliance: {
+    available: boolean;
+    source?: string;
+    text?: string;
+    eu_responsible?: string;
+  };
+  sources: DataSource[];
+  warnings: string[];
 }
 
 export interface AnalysisResult {

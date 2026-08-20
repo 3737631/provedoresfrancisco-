@@ -391,20 +391,26 @@ export function parseAliExpress(html: string, url: string): ExtractedProduct {
       }
       const seller = getByPath(rp, "data.sellerCompanyInfo") as Record<string, unknown> | undefined;
       if (seller) {
-        result.manufacturer_name = firstDefined(
+        // sellerCompanyInfo es la EMPRESA LEGAL DEL VENDEDOR (la tienda), no el
+        // fabricante del producto. Se guarda como informacion del vendedor; el
+        // fabricante se rellena solo desde la informacion de conformidad.
+        const company = firstDefined(
           seller.companyName,
           seller.company_name,
           seller.legalCompanyName,
           seller.name
         );
-        result.manufacturer_address = firstDefined(
+        if (company && !result.seller_name) result.seller_name = String(company);
+        result.seller_address = firstDefined(
           seller.registeredAddress,
           seller.address,
           seller.addressLine,
           seller.contactAddress
         );
-        result.manufacturer_email = firstDefined(seller.email, seller.contactEmail, seller.companyEmail);
-        result.manufacturer_phone = firstDefined(seller.phone, seller.telephone, seller.contactPhone);
+        result.seller_email = firstDefined(seller.email, seller.contactEmail, seller.companyEmail);
+        result.seller_phone = firstDefined(seller.phone, seller.telephone, seller.contactPhone);
+        result.manufacturer_confidence = "media";
+        result.manufacturer_verified = false;
       }
     }
   }
@@ -430,6 +436,11 @@ export function parseAliExpress(html: string, url: string): ExtractedProduct {
   const comp = compliance[0];
   if (!result.manufacturer_name && comp?.company) {
     result.manufacturer_name = comp.company;
+  }
+  // La informacion de conformidad es la fuente autoritativa del fabricante.
+  if (comp?.company) {
+    result.manufacturer_verified = true;
+    result.manufacturer_confidence = "alta";
   }
   if (!result.manufacturer_address && comp?.address) {
     result.manufacturer_address = comp.address;
@@ -637,6 +648,8 @@ export function applyAliExpressCompliancePopup(result: ExtractedProduct, popText
   if (mfg) {
     // La informacion oficial de conformidad es la fuente autoritativa:
     // sobrescribe cualquier placeholder (nombre de tienda) y rellena los vacios.
+    result.manufacturer_verified = true;
+    result.manufacturer_confidence = "alta";
     if (mfg.name) result.manufacturer_name = mfg.name;
     if (mfg.address) result.manufacturer_address = mfg.address;
     if (mfg.email) result.manufacturer_email = mfg.email;

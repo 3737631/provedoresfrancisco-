@@ -3,6 +3,32 @@
 import { useState, useEffect } from "react";
 import CopyButton from "@/components/CopyButton";
 
+interface Report {
+  success: boolean;
+  url: string;
+  product_id?: string;
+  title?: string;
+  image_url?: string;
+  price?: string;
+  currency?: string;
+  store?: string;
+  seller: { name?: string; email?: string; store_url?: string; confidence: string };
+  brand: { name?: string; confidence: string };
+  manufacturer: {
+    name?: string;
+    legal_name?: string;
+    email?: string;
+    address?: string;
+    country?: string;
+    phone?: string;
+    verified: boolean;
+    confidence: string;
+  };
+  compliance: { available: boolean; source?: string; text?: string; eu_responsible?: string };
+  sources: Array<{ type: string; url?: string; title?: string; confidence: string }>;
+  warnings: string[];
+}
+
 interface MarketResult {
   competition: "baja" | "media" | "alta";
   competitorCount: number;
@@ -41,27 +67,75 @@ interface AnalyzeData {
     body: string;
   };
   market?: MarketResult | null;
+  report?: Report;
   error?: string;
 }
 
-const CONTACT_LABEL: Record<string, string> = {
-  fabricante: "Fabricante",
-  proveedor: "Proveedor",
-  vendedor: "Vendedor",
-  eu_responsible: "Responsable UE",
+const LOADING_STEPS = [
+  "Analizando producto...",
+  "Buscando información del fabricante...",
+  "Verificando datos...",
+  "Calculando beneficio...",
+];
+
+const SOURCE_LABEL: Record<string, string> = {
+  pagina_aliexpress: "Página oficial de AliExpress",
+  conformidad_aliexpress: "Información de conformidad (AliExpress)",
+  api_producto: "API de datos de producto",
+  busqueda_web: "Búsqueda web pública",
+  busqueda_fabricante: "Localización del fabricante",
+  pagina_web: "Página web del producto",
+  captura_navegador: "Captura del navegador",
 };
+
+const CONF_STYLE: Record<string, string> = {
+  alta: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  media: "bg-amber-50 text-amber-700 border-amber-200",
+  baja: "bg-slate-100 text-slate-500 border-slate-200",
+};
+
+function Badge({ children, tone = "slate" }: { children: React.ReactNode; tone?: string }) {
+  const tones: Record<string, string> = {
+    slate: "bg-slate-100 text-slate-600",
+    green: "bg-emerald-50 text-emerald-700",
+    amber: "bg-amber-50 text-amber-700",
+    brand: "bg-brand-100 text-brand-700",
+    rose: "bg-rose-50 text-rose-600",
+  };
+  return <span className={`badge ${tones[tone] || tones.slate}`}>{children}</span>;
+}
+
+function ConfBadge({ c }: { c: string }) {
+  const map: Record<string, string> = {
+    alta: "Confianza: ALTA",
+    media: "Confianza: MEDIA",
+    baja: "Confianza: BAJA",
+  };
+  return (
+    <span className={`badge border ${CONF_STYLE[c] || CONF_STYLE.baja}`}>
+      {map[c] || "Confianza: —"}
+    </span>
+  );
+}
+
+function Label({ children }: { children: React.ReactNode }) {
+  return <div className="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-3">{children}</div>;
+}
 
 export default function AnalyzePage() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AnalyzeData | null>(null);
+  const [step, setStep] = useState(0);
 
   async function run(urlInput: string) {
     if (!urlInput.trim() || loading) return;
     setLoading(true);
     setError(null);
     setData(null);
+    setStep(0);
+    const timer = setInterval(() => setStep((s) => Math.min(s + 1, LOADING_STEPS.length - 1)), 5000);
     try {
       const res = await fetch("/api/analyze", {
         method: "POST",
@@ -75,7 +149,7 @@ export default function AnalyzePage() {
       }
       if (!d.success) {
         setError(
-          d.analysis?.warnings?.join(" ") || "No se pudo extraer el producto."
+          d.analysis?.warnings?.join(" ") || d.report?.warnings?.join(" ") || "No se pudo extraer el producto."
         );
         return;
       }
@@ -84,10 +158,11 @@ export default function AnalyzePage() {
       setError("Error de red. Revisa que el servidor esté funcionando.");
     } finally {
       setLoading(false);
+      clearInterval(timer);
     }
   }
 
-  async function handleAnalyze(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     await run(url);
   }
@@ -98,63 +173,57 @@ export default function AnalyzePage() {
       setUrl(q);
       void run(q);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Boton de captura: se arrastra a la barra de favoritos y se pulsa dentro
-  // del producto de AliExpress. Usa TU navegador (no bloqueado por captcha),
-  // captura la informacion de conformidad y te devuelve aqui con todo.
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const token = process.env.NEXT_PUBLIC_CAPTURE_TOKEN || "provedores";
-  const bookmarklet = `javascript:(()=>{const u=location.href;const t='${token}',o='${origin}';const f=[...document.querySelectorAll('button,div,a,span')].find(e=>{const x=(e.textContent||'').trim();return x&&x.length<80&&/conformidad|compliance/i.test(x)});const go=()=>fetch(o+'/api/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:u,html:document.documentElement.outerHTML,token:t})}).then(r=>r.json()).then(d=>{d.ok?location.href=o+'/analyze?url='+encodeURIComponent(u):alert('Error: '+(d.error||'no ok'))}).catch(e=>alert('Error de red: '+e));f?(f.click(),setTimeout(go,3000)):go()})();`;
 
   const a = data?.analysis;
   const email = data?.email;
   const market = data?.market;
+  const report = data?.report;
+  const mfg = report?.manufacturer;
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
       <div className="text-center">
         <h1 className="text-3xl font-extrabold">AliExpress</h1>
         <p className="text-slate-500 mt-1">
-          Pega el enlace del producto y te doy qué es, el contacto del fabricante,
-          un mensaje listo para copiar y el beneficio estimado.
+          Pega el enlace del producto y pulsa «Buscar proveedor». Te devuelvo el fabricante, el
+          vendedor y el beneficio estimado.
         </p>
       </div>
 
-      <form onSubmit={handleAnalyze} className="card p-6">
+      <form onSubmit={handleSubmit} className="card p-6">
         <div className="flex flex-col sm:flex-row gap-3">
           <input
             type="url"
             required
             className="input flex-1"
-            placeholder="https://es.aliexpress.com/item/1005001234567890.html"
+            placeholder="Pega aquí el enlace de AliExpress"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
           />
           <button
             type="submit"
-            className="btn-primary whitespace-nowrap justify-center"
+            className="btn-primary whitespace-nowrap justify-center text-base px-8"
             disabled={loading}
           >
-            {loading ? "Analizando…" : "Analizar"}
+            {loading ? "Buscando…" : "BUSCAR PROVEEDOR"}
           </button>
         </div>
         {loading && (
           <div className="mt-4 flex items-center gap-3 text-sm text-slate-500">
             <span className="w-4 h-4 border-2 border-brand-200 border-t-brand-600 rounded-full animate-spin" />
-            Buscando el producto y calculando beneficios (unos 20 segundos)…
+            {LOADING_STEPS[step]}
           </div>
         )}
         {error && <div className="mt-4 text-sm text-rose-600">{error}</div>}
       </form>
 
-      {a && (
+      {a && report && (
         <div className="space-y-5">
           {/* QUE ES */}
           <section className="card p-5">
-            <h2 className="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-3">
-              Qué es
-            </h2>
+            <Label>Qué es</Label>
             <div className="flex gap-4">
               {a.image_url && (
                 <img
@@ -164,103 +233,197 @@ export default function AnalyzePage() {
                 />
               )}
               <div className="min-w-0">
-                <div className="font-semibold leading-snug">{a.name}</div>
+                <div className="font-semibold leading-snug">{report.title || a.name}</div>
                 <div className="flex flex-wrap gap-2 mt-2 text-sm">
-                  {a.price && (
-                    <span className="badge bg-emerald-50 text-emerald-700 text-base font-bold">
-                      {a.price}
-                    </span>
+                  {report.price && (
+                    <Badge tone="green">
+                      {report.price}
+                      {report.currency ? ` ${report.currency}` : ""}
+                    </Badge>
                   )}
-                  {a.seller_name && (
-                    <span className="badge bg-slate-100 text-slate-600">
-                      Vendido por {a.seller_name}
-                    </span>
-                  )}
+                  {report.store && <Badge>Tienda: {report.store}</Badge>}
                 </div>
               </div>
             </div>
           </section>
 
-          {/* CONTACTO */}
+          {/* FABRICANTE */}
           <section className="bg-brand-600 rounded-2xl p-6 text-white shadow-sm">
-            <h2 className="text-xs uppercase tracking-wider text-brand-100 font-semibold mb-3">
-              Contacto del fabricante
-            </h2>
-            {(a.contacts || []).filter((c) => c.email).length > 0 ? (
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+              <h2 className="text-xs uppercase tracking-wider text-brand-100 font-semibold">
+                Fabricante
+              </h2>
+              <ConfBadge c={mfg?.confidence || "baja"} />
+            </div>
+
+            {mfg?.verified || mfg?.name ? (
               <div className="space-y-3">
-                {(a.contacts || [])
-                  .filter((c) => c.email)
-                  .slice(0, 2)
-                  .map((c, i) => (
-                    <div key={i} className="bg-white rounded-xl p-4 text-slate-800">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold">
-                          {c.company || CONTACT_LABEL[c.contact_type] || "Contacto"}
-                        </span>
-                        <span className="badge bg-brand-100 text-brand-700">
-                          {CONTACT_LABEL[c.contact_type] || c.contact_type}
-                        </span>
+                {mfg.verified && (
+                  <div className="badge bg-white text-emerald-700 font-bold">VERIFICADO ✓</div>
+                )}
+                {mfg.name && (
+                  <div className="bg-white rounded-xl p-4 text-slate-800">
+                    <div className="text-sm text-slate-500">Nombre</div>
+                    <div className="text-lg font-bold break-words">{mfg.name}</div>
+                    {mfg.legal_name && mfg.legal_name !== mfg.name && (
+                      <div className="text-xs text-slate-500 mt-1">
+                        Nombre legal: {mfg.legal_name}
                       </div>
-                      <div className="flex items-center gap-2 flex-wrap mt-2">
-                        <span className="font-mono text-lg font-bold text-brand-700 break-all">
-                          {c.email}
-                        </span>
-                        <CopyButton text={c.email || ""} label="Copiar email" />
+                    )}
+                    {mfg.email && (
+                      <div className="mt-2 flex items-center gap-2 flex-wrap">
+                        <span className="font-mono text-brand-700 font-bold break-all">{mfg.email}</span>
+                        <CopyButton text={mfg.email} label="Copiar email" />
                       </div>
-                      {(c.phone || c.address) && (
-                        <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-x-3">
-                          {c.phone && <span>☎ {c.phone}</span>}
-                          {c.address && <span>📍 {c.address}</span>}
-                        </div>
-                      )}
+                    )}
+                    {(mfg.address || mfg.country) && (
+                      <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-x-3">
+                        {mfg.address && <span>📍 {mfg.address}</span>}
+                        {mfg.country && <span>🌍 {mfg.country}</span>}
+                        {mfg.phone && <span>☎ {mfg.phone}</span>}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {report.warnings
+                  .filter((w) => /verificad/i.test(w))
+                  .map((w, i) => (
+                    <div key={i} className="text-xs text-white/80">
+                      {w}
                     </div>
                   ))}
               </div>
             ) : (
-              <div className="bg-white/10 rounded-xl p-4 text-sm space-y-3">
-                <div>
-                  No se encontró email del fabricante.
-                  {a.seller_name && (
-                    <div className="mt-1 font-medium">
-                      {a.seller_name} (vía mensaje de AliExpress)
-                    </div>
-                  )}
+              <div className="bg-white/10 rounded-xl p-4 text-sm space-y-2">
+                <div className="font-bold text-white">Fabricante no verificado</div>
+                <div className="text-white/90">
+                  No se ha podido confirmar quién fabrica este producto con las fuentes
+                  disponibles. Lo que sí se encontró:
                 </div>
-                <div className="text-xs text-white/80">
-                  AliExpress bloquea a la app cuando corre desde internet
-                  (te muestra la página sin fabricante y pone captcha). Desde tu
-                  ordenador sí funciona. Para obtener el fabricante desde aquí en
-                  1 clic, usa TU navegador (no está bloqueado):
-                </div>
-                <ol className="text-xs text-white/90 list-decimal list-inside space-y-1">
-                  <li>
-                    Arrastra este botón a tu barra de favoritos:{" "}
-                    <a
-                      href={bookmarklet}
-                      className="inline-block bg-white text-brand-700 font-bold px-2 py-1 rounded text-xs no-underline"
-                      title="ProveDores: capturar fabricante"
-                    >
-                      ★ ProveDores
-                    </a>
-                  </li>
-                  <li>
-                    Abre el producto de AliExpress en otra pestaña y baja hasta
-                    «Información sobre conformidad del producto».
-                  </li>
-                  <li>Pulsa tu botón ★ ProveDores en la barra.</li>
-                  <li>Te devuelve aquí con el fabricante y el email listos.</li>
-                </ol>
+                <ul className="text-white/90 list-disc list-inside space-y-0.5 text-xs">
+                  {report.store && <li>Vendedor: {report.store}</li>}
+                  {report.brand?.name && <li>Marca: {report.brand.name}</li>}
+                  {report.product_id && <li>ID de producto: {report.product_id}</li>}
+                  {report.warnings
+                    .filter((w) => !/verificad/i.test(w))
+                    .map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                </ul>
               </div>
             )}
           </section>
+
+          {/* VENDEDOR */}
+          <section className="card p-5">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <Label>Vendedor (tienda AliExpress)</Label>
+              <ConfBadge c={report.seller.confidence} />
+            </div>
+            <div className="text-base font-semibold">{report.seller.name || "—"}</div>
+            {report.seller.store_url && (
+              <a
+                href={report.seller.store_url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-brand-600 text-sm underline break-all"
+              >
+                {report.seller.store_url}
+              </a>
+            )}
+            {report.seller.email && (
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                <span className="font-mono text-sm text-slate-700 break-all">{report.seller.email}</span>
+                <CopyButton text={report.seller.email} label="Copiar" />
+              </div>
+            )}
+            <div className="text-xs text-slate-400 mt-1">
+              El vendedor es la tienda que vende en AliExpress; puede no ser el fabricante.
+            </div>
+          </section>
+
+          {/* MARCA */}
+          {report.brand?.name && (
+            <section className="card p-5">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <Label>Marca</Label>
+                <ConfBadge c={report.brand.confidence} />
+              </div>
+              <div className="text-base font-semibold">{report.brand.name}</div>
+            </section>
+          )}
+
+          {/* CONFORMIDAD */}
+          <section className="card p-5">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <Label>Información de conformidad</Label>
+              {report.compliance.available ? (
+                <Badge tone="green">Disponible</Badge>
+              ) : (
+                <Badge>No disponible</Badge>
+              )}
+            </div>
+            {report.compliance.eu_responsible && (
+              <div className="text-sm">
+                <span className="text-slate-500">Responsable UE:</span>{" "}
+                <span className="font-medium">{report.compliance.eu_responsible}</span>
+              </div>
+            )}
+            {report.compliance.source && (
+              <div className="text-xs text-slate-400 mt-1">Fuente: {report.compliance.source}</div>
+            )}
+            {report.compliance.text && (
+              <details className="mt-2">
+                <summary className="text-sm text-brand-600 cursor-pointer">Ver detalle</summary>
+                <pre className="mt-2 whitespace-pre-wrap bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs leading-relaxed font-sans">
+                  {report.compliance.text}
+                </pre>
+              </details>
+            )}
+            {!report.compliance.available && (
+              <div className="text-xs text-slate-400">
+                AliExpress no expone esta información en la página pública para servidores
+                (bloqueo anti-bot). El fabricante mostrado arriba, si aparece, proviene de
+                otras fuentes públicas.
+              </div>
+            )}
+          </section>
+
+          {/* FUENTES */}
+          {report.sources.length > 0 && (
+            <section className="card p-5">
+              <Label>Fuentes de datos</Label>
+              <ul className="space-y-2 text-sm">
+                {report.sources.slice(0, 10).map((s, i) => (
+                  <li key={i} className="flex items-start gap-2">
+                    <ConfBadge c={s.confidence} />
+                    <div className="min-w-0">
+                      <div className="font-medium">
+                        {SOURCE_LABEL[s.type] || s.type}
+                        {s.title ? ` — ${s.title}` : ""}
+                      </div>
+                      {s.url && (
+                        <a
+                          href={s.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-brand-600 text-xs underline break-all"
+                        >
+                          {s.url}
+                        </a>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           {/* MENSAJE */}
           {email && (
             <section className="card p-5">
               <div className="flex items-center justify-between gap-3 mb-2">
-                <h2 className="text-xs uppercase tracking-wider text-slate-400 font-semibold">
-                  Mensaje personalizado
-                </h2>
+                <Label>Mensaje personalizado</Label>
                 <CopyButton text={email.body} label="Copiar mensaje" />
               </div>
               <div className="text-xs text-slate-500 mb-2">
@@ -276,9 +439,7 @@ export default function AnalyzePage() {
           {market && (
             <section className="card p-5">
               <div className="flex items-center justify-between gap-3">
-                <h2 className="text-xs uppercase tracking-wider text-slate-400 font-semibold">
-                  Beneficio estimado
-                </h2>
+                <Label>Beneficio estimado</Label>
                 <span
                   className={`badge text-sm ${
                     market.competition === "alta"
@@ -323,13 +484,13 @@ export default function AnalyzePage() {
                 ))}
               </ul>
 
-              {!market.retailPriceEur && a.name && (
+              {!market.retailPriceEur && report.title && (
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   <span className="text-sm text-slate-500">
                     No lo encontró a la venta: búscalo tú para ver el valor:
                   </span>
                   <a
-                    href={`https://www.google.com/search?q=${encodeURIComponent(a.name + " buy")}`}
+                    href={`https://www.google.com/search?q=${encodeURIComponent(report.title + " buy")}`}
                     target="_blank"
                     rel="noreferrer"
                     className="btn text-sm px-3 py-1.5"
@@ -337,7 +498,7 @@ export default function AnalyzePage() {
                     Buscar en Google
                   </a>
                   <a
-                    href={`https://www.bing.com/search?q=${encodeURIComponent(a.name + " site:myshopify.com OR /products/")}`}
+                    href={`https://www.bing.com/search?q=${encodeURIComponent(report.title + " site:myshopify.com OR /products/")}`}
                     target="_blank"
                     rel="noreferrer"
                     className="btn text-sm px-3 py-1.5"
@@ -345,7 +506,7 @@ export default function AnalyzePage() {
                     Buscar en Shopify
                   </a>
                   <a
-                    href={`https://www.amazon.es/s?k=${encodeURIComponent(a.name)}`}
+                    href={`https://www.amazon.es/s?k=${encodeURIComponent(report.title)}`}
                     target="_blank"
                     rel="noreferrer"
                     className="btn text-sm px-3 py-1.5"

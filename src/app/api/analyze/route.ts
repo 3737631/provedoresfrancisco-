@@ -1,8 +1,10 @@
 import { NextRequest } from "next/server";
 import { ok, fail, requireUser } from "@/lib/api-helpers";
 import { analyzeProductUrl, analyzeProductHtml, normalizeAliExpressUrl } from "@/lib/scrape/extractor";
+import { buildProductReport } from "@/lib/scrape/report";
 import { analyzeMarket, parsePriceToEur } from "@/lib/scrape/market";
 import { store } from "@/lib/store";
+import { rateLimit } from "@/lib/rate-limit";
 import { generateEmail, generateBody, generateSubject, pickBestContact } from "@/lib/email/message-generator";
 import type { Contact } from "@/lib/types";
 
@@ -20,6 +22,16 @@ export async function OPTIONS() {
 }
 
 export async function POST(req: NextRequest) {
+  // Rate limiting por IP (uso personal: 6/min). No aplica en modo local.
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "unknown";
+  const rl = rateLimit(ip);
+  if (!rl.allowed) {
+    return new Response(
+      JSON.stringify({ error: `Demasiadas peticiones. Espera ${rl.retryAfterSec} segundos.` }),
+      { status: 429, headers: { "Content-Type": "application/json", "Retry-After": String(rl.retryAfterSec) } }
+    );
+  }
+
   const auth = await requireUser();
   if (auth.error) return auth.error;
   const { userId } = auth;
@@ -194,6 +206,7 @@ export async function POST(req: NextRequest) {
       product,
       analysis: analysis.product,
       success: analysis.success,
+      report: buildProductReport(analysis.product),
       email_id,
       email: emailData,
       market,

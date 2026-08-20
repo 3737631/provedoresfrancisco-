@@ -1,16 +1,25 @@
-import type { AnalysisResult, ExtractedProduct } from "@/lib/types";
+import type { AnalysisResult, DataSource, ExtractedProduct } from "@/lib/types";
 import { isAliExpressUrl, normalizeUrl, extractAliExpressId } from "@/lib/utils";
 import { fetchPage, fetchRenderedPage, isCaptchaPage } from "./fetcher";
 import { parseAliExpress, applyAliExpressCompliancePopup } from "./aliexpress";
 import { parseGenericPage, makeProductFromGeneric } from "./generic";
 import { searchManufacturer } from "./manufacturer";
 import { findProductContacts } from "./market";
+import { fetchProductFromApi, searchProductInfo } from "./sources";
 import { extractProductWithLLM } from "./llm";
 import { extractEmails } from "@/lib/utils";
 
 // ============================================================
-//  Orquestador de extraccion.
-//  Estrategias: AliExpress (JSON embebido + HTML) -> LLM -> generico
+//  Orquestador de extraccion multi-fuente.
+//  FUENTE 1: pagina oficial de AliExpress (directo -> reintento ->
+//            proxy opcional -> Jina -> navegador real). Si AliExpress
+//            bloquea (captcha/403/429/vacio/incompleto), se pasa a la
+//            siguiente fuente. NO se salta el captcha.
+//  FUENTE 2: API/proveedor legitimo de datos de producto (por URL/ID).
+//  FUENTE 3: busqueda web publica por ID / nombre / tienda.
+//  FUENTE 4: localizar al fabricante (directorios B2B y web oficial).
+//  Cada dato lleva su fuente y nivel de confianza. Nunca se inventa:
+//  si no se verifica el fabricante, se devuelve "no verificado".
 // ============================================================
 
 // Los enlaces "bundle"/"ssr" de AliExpress (p.ej. /ssr/300000512/BundleDeals...)
@@ -50,15 +59,16 @@ export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult>
     return { product: { url }, method: "none", success: false, error: "La URL no es valida." };
   }
 
+  const productId = extractAliExpressId(url) || undefined;
   const product: ExtractedProduct = {
     url,
-    product_id: extractAliExpressId(url) || undefined,
+    product_id: productId,
     extraction_method: isAliExpressUrl(url) ? "aliexpress" : "generic",
     warnings: [],
+    source_log: [],
   };
 
-  // 1) Intentar descargar la pagina (varios subdominios de AliExpress en
-  //     cascada: algunos responden con captcha segun la IP del servidor)
+  // ---- FUENTE 1: pagina oficial (cascada de subdominios) ----
   let fetched: Awaited<ReturnType<typeof fetchPage>> | null = null;
   let fetchUrl = url;
   const candidates = isAliExpressUrl(url) ? [url, ...aliExpressAlternates(url)] : [url];
@@ -73,15 +83,110 @@ export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult>
       break;
     }
   }
-  if (!fetched) {
-    const msg =
-      "La pagina no pudo ser descargada automaticamente (bloqueo anti-bot o enlace no publico). Puedes introducir los datos manualmente.";
-    product.warnings?.push(msg);
-    product.extraction_method = "manual";
-    return { product, method: "blocked", success: false, error: msg };
+
+  let method = "none";
+  if (fetched) {
+    const res = await analyzeProductHtml(fetched.html, url, fetched, product);
+    method = res.method;
+    Object.assign(product, res.product);
+    product.source_log ||= [];
+    if (fetched.extra?.aliexpress_compliance) {
+      // la informacion de conformidad capturada es la fuente autoritativa
+      product.manufacturer_verified = true;
+      product.manufacturer_confidence = "alta";
+      product.compliance_text = fetched.extra.aliexpress_compliance;
+      pushSource(product, {
+        type: "conformidad_aliexpress",
+        url: fetchUrl,
+        title: "Información sobre conformidad del producto (AliExpress)",
+        confidence: "alta",
+      });
+    }
+    pushSource(product, {
+      type: isAliExpressUrl(url) ? "pagina_aliexpress" : "pagina_web",
+      url: fetchUrl,
+      confidence: "alta",
+    });
+  } else {
+    product.warnings?.push(
+      "AliExpress bloqueo la descarga automatica (captcha o anti-bot). Se prueban fuentes alternativas."
+    );
+    pushSource(product, { type: "pagina_aliexpress", url, confidence: "baja" });
   }
 
-  return analyzeProductHtml(fetched.html, url, fetched, product);
+  // ---- FUENTE 2: API/proveedor legitimo de datos (por URL/ID) ----
+  const apiResult = await fetchProductFromApi({ url, productId });
+  if (apiResult) {
+    mergeInto(product, apiResult.data);
+    pushSource(product, apiResult.source);
+  }
+
+  // ---- FUENTE 3: busqueda web publica por ID / nombre / tienda ----
+  const webResult = await searchProductInfo({
+    productId,
+    name: product.name,
+    store: product.seller_name,
+  });
+  if (webResult) {
+    mergeInto(product, webResult.data);
+    for (const s of webResult.sources) pushSource(product, s);
+  }
+
+  // ---- FUENTE 4: localizar fabricante (B2B / web oficial) ----
+  // Se ejecuta dentro de analyzeProductHtml (searchManufacturer + findProductContacts)
+  // usando el nombre del fabricante/vendedor y del producto.
+
+  if (fetched && product.manufacturer_verified) {
+    product.warnings = (product.warnings || []).filter((w) => w !== "No se ha podido verificar el fabricante de este producto.");
+  }
+  const hasData = Boolean(
+    product.name ||
+      product.seller_name ||
+      product.manufacturer_name ||
+      (product.contacts?.length ?? 0) > 0 ||
+      product.seller_email
+  );
+  if (!hasData) {
+    const msg =
+      "No se ha podido verificar el fabricante de este producto. Las fuentes disponibles no devolvieron datos del producto.";
+    product.warnings?.push(msg);
+    return { product, method, success: false, error: msg };
+  }
+  if (!product.manufacturer_verified) {
+    product.warnings?.push("No se ha podido verificar el fabricante de este producto.");
+  }
+
+  return { product, method, success: true };
+}
+
+// Anade una fuente al log si no existe ya.
+function pushSource(product: ExtractedProduct, source: DataSource) {
+  product.source_log ||= [];
+  const dup = product.source_log.some((s) => s.type === source.type && s.url === source.url);
+  if (!dup) product.source_log.push(source);
+}
+
+// Fusiona datos de una fuente alternativa rellenando solo campos vacios.
+// Nunca pisa datos ya confirmados (p.ej. fabricante verificado por conformidad).
+function mergeInto(target: ExtractedProduct, data: Partial<ExtractedProduct>) {
+  const fill = (k: (keyof ExtractedProduct)[]) => {
+    for (const key of k) {
+      const v = data[key];
+      if (v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0)) continue;
+      const cur = target[key];
+      if (cur === undefined || cur === null || cur === "" || (Array.isArray(cur) && cur.length === 0)) {
+        (target as unknown as Record<string, unknown>)[key] = v;
+      }
+    }
+  };
+  fill(["name", "image_url", "price", "currency", "seller_name", "seller_store_url"]);
+  fill(["product_id", "brand", "manufacturer_email", "manufacturer_address"]);
+  // fabricante solo si el destino no tiene uno verificado (no degradar)
+  if (!target.manufacturer_verified && !target.manufacturer_name && data.manufacturer_name) {
+    target.manufacturer_name = data.manufacturer_name;
+    target.manufacturer_confidence = data.manufacturer_confidence || "media";
+    target.manufacturer_verified = false;
+  }
 }
 
 // Analiza el HTML de una pagina ya descargada (util cuando el navegador del
@@ -113,11 +218,30 @@ export async function analyzeProductHtml(
   parsed.extraction_method =
     method === "jina" ? `${parsed.extraction_method}+jina` : parsed.extraction_method;
 
+  // Marca desde el JSON-LD de la pagina (dato publico, sin inventar).
+  if (!parsed.brand) {
+    const brand =
+      html.match(/"brand"\s*:\s*\{\s*"@type"\s*:\s*"Brand"\s*,\s*"name"\s*:\s*"([^"]+)"/i)?.[1] ||
+      html.match(/"brand"\s*:\s*"([^"]{2,60})"/i)?.[1] ||
+      html.match(/<meta[^>]+itemprop="brand"[^>]+content="([^"]+)"/i)?.[1];
+    if (brand) parsed.brand = cleanBrand(brand);
+  }
+
   // 2a) AliExpress: la informacion de conformidad (fabricante, email,
   //     direccion, responsable UE) llega por la API mtop capturada por el
   //     navegador; aplicarla sobre el resultado.
   if (isAliExpressUrl(url) && fetched?.extra?.aliexpress_compliance) {
     applyAliExpressCompliancePopup(parsed, fetched.extra.aliexpress_compliance);
+    parsed.manufacturer_verified = true;
+    parsed.manufacturer_confidence = "alta";
+    parsed.compliance_text = fetched.extra.aliexpress_compliance;
+    parsed.source_log ||= [];
+    parsed.source_log.push({
+      type: "conformidad_aliexpress",
+      url,
+      title: "Información sobre conformidad del producto (AliExpress)",
+      confidence: "alta",
+    });
   }
 
   // 2b) AliExpress: la pagina carga datos por JavaScript (nombre/precio/seller
@@ -135,11 +259,26 @@ export async function analyzeProductHtml(
       const rich = parseAliExpress(rendered.html, rendered.finalUrl || url);
       if (rendered.extra?.aliexpress_compliance) {
         applyAliExpressCompliancePopup(rich, rendered.extra.aliexpress_compliance);
+        rich.manufacturer_verified = true;
+        rich.manufacturer_confidence = "alta";
+        rich.compliance_text = rendered.extra.aliexpress_compliance;
       }
       mergeParse(parsed, rich);
       parsed.extraction_method = `${parsed.extraction_method}+browser`;
       if (!parsed.seller_name && rich.seller_name) parsed.seller_name = rich.seller_name;
       if (!parsed.seller_store_url && rich.seller_store_url) parsed.seller_store_url = rich.seller_store_url;
+      if (rich.manufacturer_verified) {
+        parsed.manufacturer_verified = true;
+        parsed.manufacturer_confidence = "alta";
+        parsed.compliance_text = rich.compliance_text;
+        parsed.source_log ||= [];
+        parsed.source_log.push({
+          type: "conformidad_aliexpress",
+          url: rendered.finalUrl || url,
+          title: "Información sobre conformidad del producto (AliExpress)",
+          confidence: "alta",
+        });
+      }
     }
   }
 
@@ -211,6 +350,13 @@ function stripHtml(html: string): string {
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .slice(0, 14000);
+}
+
+function cleanBrand(s: string): string {
+  const v = s.trim();
+  if (v.length < 2 || v.length > 60) return v;
+  if (/aliexpress|ali express|no brand|sin marca/i.test(v)) return v;
+  return v;
 }
 
 // Fusiona un parseo rico (navegador) sobre uno fino, rellenando
