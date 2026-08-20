@@ -61,6 +61,61 @@ async function duckDuckGo(query: string): Promise<SearchHit[]> {
   }
 }
 
+// Bing de redirige a traves de /ck/a; resolver el destino real.
+async function resolveBingRedirect(url: string): Promise<string> {
+  if (!url.includes("bing.com/ck/")) return url;
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": UA },
+      redirect: "manual",
+      signal: AbortSignal.timeout(10000),
+    });
+    const loc = res.headers.get("location");
+    return loc || url;
+  } catch {
+    return url;
+  }
+}
+
+// Bing como buscador de respaldo (DuckDuckGo a veces bloquea o devuelve 202).
+async function bingSearch(query: string): Promise<SearchHit[]> {
+  try {
+    const res = await fetch(
+      `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=es`,
+      {
+        headers: {
+          "User-Agent": UA,
+          "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+          Accept: "text/html",
+        },
+      }
+    );
+    if (!res.ok) return [];
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const results: SearchHit[] = [];
+    for (const el of Array.from($("li.b_algo").get()).slice(0, 8)) {
+      const title = cleanText($(el).find("h2").text());
+      const href = $(el).find("h2 a").attr("href") || "";
+      const snippet = cleanText($(el).find(".b_caption p, .b_lineclamp2").text());
+      if (!title || !href) continue;
+      const realUrl = await resolveBingRedirect(href);
+      results.push({ title, url: realUrl, snippet });
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+// Busca en DDG primero y, si no hay resultados, en Bing.
+export async function searchEngine(query: string): Promise<SearchHit[]> {
+  const ddg = await duckDuckGo(query);
+  if (ddg.length > 0) return ddg;
+  await sleep(300);
+  return bingSearch(query);
+}
+
 const MARKETPLACE_RE =
   /(amazon|ebay|temu|walmart|etsy|shein|wish|shopify|mercadolibre|corte ingl|fnac|media[ -]?markt|aliexpress)/i;
 
@@ -99,7 +154,7 @@ export async function findProductContacts(productName: string): Promise<Contact[
   const seenUrls = new Set<string>();
 
   for (const q of queries) {
-    const results = await duckDuckGo(q);
+    const results = await searchEngine(q);
     for (const r of results) {
       if (r.url.includes("duckduckgo.com")) continue;
       const emails = extractEmails(`${r.title} ${r.snippet}`);
@@ -145,6 +200,36 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Shopify y tiendas parecidas publican el precio en el HTML (meta og:price o
+// JSON embebido). Navega a la pagina del producto y extrae el precio real.
+async function fetchShopifyPrice(url: string): Promise<number | null> {
+  if (!/myshopify\.com|\/products\//i.test(url)) return null;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    const res = await fetch(url, {
+      headers: { "User-Agent": UA, "Accept-Language": "es-ES,es;q=0.9,en;q=0.8" },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const html = await res.text();
+    if (html.length < 300 || /captcha|verify/i.test(html.slice(0, 4000))) return null;
+
+    const meta =
+      html.match(/(?:og:price|product:price|product:price:amount)[^>]*content="([\d.,]+)"/i)?.[1] ||
+      html.match(/"price"\s*:\s*"(\d{1,5}(?:[.,]\d{1,3}){0,2})"/i)?.[1] ||
+      html.match(/<span[^>]*class="[^"]*price[^"]*"[^>]*>\s*([€$£]?\s*\d{1,5}(?:[.,]\d{1,3}){0,2})/i)?.[1];
+    if (!meta) return null;
+    const digits = meta.match(/\d{1,5}(?:[.,]\d{1,3}){0,2}/);
+    if (!digits) return null;
+    const n = parseFloat(digits[0].replace(/\./g, "").replace(",", "."));
+    return isFinite(n) && n > 0.5 && n < 100000 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function analyzeMarket(
   productName: string,
   costPriceEur: number | null
@@ -170,6 +255,8 @@ export async function analyzeMarket(
     `"${name}" price buy`,
     `"${name}" precio comprar`,
     `"${name}" amazon price`,
+    `"${name}" shopify`,
+    `"${name}" myshopify.com`,
     `"${name}" wholesale price`,
     `"${name}" competitors dropshipping`,
   ];
@@ -177,14 +264,17 @@ export async function analyzeMarket(
   const prices: number[] = [];
   const marketplaces = new Set<string>();
   const domains = new Set<string>();
+  const productUrls: string[] = [];
   let hits = 0;
 
   for (const q of queries) {
-    const results = await duckDuckGo(q);
+    const results = await searchEngine(q);
     for (const r of results) {
       hits++;
       try {
-        domains.add(new URL(r.url).hostname.replace(/^www\./, ""));
+        const host = new URL(r.url).hostname.replace(/^www\./, "");
+        domains.add(host);
+        if (/myshopify\.com|\/products\//i.test(r.url)) productUrls.push(r.url);
       } catch {
         /* ignorar */
       }
@@ -197,6 +287,15 @@ export async function analyzeMarket(
       if (p && p > 0.5 && p < 20000) prices.push(p);
     }
     await sleep(500);
+  }
+
+  // Precios REALES navegando a tiendas Shopify/productos encontrados
+  for (const u of [...new Set(productUrls)].slice(0, 3)) {
+    const sp = await fetchShopifyPrice(u);
+    if (sp) {
+      prices.push(sp);
+      marketplaces.add("shopify");
+    }
   }
 
   const sorted = [...prices].sort((a, b) => a - b);
