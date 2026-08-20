@@ -109,11 +109,12 @@ async function bingSearch(query: string): Promise<SearchHit[]> {
   }
 }
 
-// Busca en DDG primero y, si no hay resultados, en Bing.
+// Busca en DDG y Bing en paralelo (espera solo el mas lento de los dos).
 export async function searchEngine(query: string): Promise<SearchHit[]> {
-  const ddg = await duckDuckGo(query);
-  if (ddg.length > 0) return ddg;
-  return bingSearch(query);
+  const [ddg, bing] = await Promise.all([duckDuckGo(query), bingSearch(query)]);
+  if (ddg.length >= 3) return ddg;
+  if (bing.length >= 3) return bing;
+  return ddg.length ? ddg : bing;
 }
 
 const MARKETPLACE_RE =
@@ -142,10 +143,7 @@ export async function findProductContacts(productName: string): Promise<Contact[
   const name = cleanText(productName || "").slice(0, 70);
   if (!name || name.length < 5) return [];
 
-  const queries = [
-    `"${name}" manufacturer email`,
-    `"${name}" supplier contact`,
-  ];
+  const queries = [`"${name}" manufacturer email`];
 
   const found: Contact[] = [];
   const seenEmails = new Set<string>();
@@ -266,10 +264,8 @@ export async function analyzeMarket(
 
   const kw = keywordQuery(name);
   const queries = [
-    `"${name}" price buy`,
-    `"${name}" shopify`,
+    `"${name}" buy price`,
     `"${kw}" price shopify buy`,
-    `"${name}" amazon price`,
   ];
 
   const prices: number[] = [];
