@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
-import { cleanText } from "@/lib/utils";
+import type { Contact } from "@/lib/types";
+import { cleanText, extractEmails } from "@/lib/utils";
 import { sleep } from "@/lib/utils";
 
 // ============================================================
@@ -77,6 +78,71 @@ export function parsePriceToEur(priceText: string | undefined): number | null {
   if (!m) return null;
   const n = parseFloat(m[1].replace(/\./g, "").replace(",", "."));
   return isFinite(n) && n > 0 ? n : null;
+}
+
+// Busca contactos del fabricante/proveedor en internet a partir del nombre del
+// producto (util cuando AliExpress bloquea la info de conformidad, p.ej. desde
+// servidores cloud). Extrae emails y sitios web de los resultados de busqueda.
+export async function findProductContacts(productName: string): Promise<Contact[]> {
+  const name = cleanText(productName || "").slice(0, 70);
+  if (!name || name.length < 5) return [];
+
+  const queries = [
+    `"${name}" manufacturer company email`,
+    `"${name}" supplier contact email`,
+    `"${name}" dropshipping supplier company`,
+    `"${name}" buy wholesale manufacturer`,
+  ];
+
+  const found: Contact[] = [];
+  const seenEmails = new Set<string>();
+  const seenUrls = new Set<string>();
+
+  for (const q of queries) {
+    const results = await duckDuckGo(q);
+    for (const r of results) {
+      if (r.url.includes("duckduckgo.com")) continue;
+      const emails = extractEmails(`${r.title} ${r.snippet}`);
+      if (!emails.length && seenUrls.has(r.url)) continue;
+      seenUrls.add(r.url);
+      if (emails.length) {
+        for (const e of emails) {
+          if (seenEmails.has(e)) continue;
+          seenEmails.add(e);
+          const company =
+            r.title
+              .split(/[|—-]/)[0]
+              .replace(new RegExp(`\\b${escapeRegExp(name.slice(0, 20))}\\b`, "i"), "")
+              .trim() || undefined;
+          found.push({
+            company: company && company.length > 2 ? company : undefined,
+            contact_type: "proveedor",
+            email: e,
+            website: r.url,
+            source: "Busqueda en internet del nombre del producto",
+            confidence: "media",
+          });
+        }
+      } else if (r.url.length && found.length < 2) {
+        found.push({
+          company: r.title.split(/[|—-]/)[0].trim() || undefined,
+          contact_type: "proveedor",
+          website: r.url,
+          source: "Busqueda en internet del nombre del producto",
+          confidence: "baja",
+        });
+      }
+      if (found.length >= 4) break;
+    }
+    if (found.length >= 4) break;
+    await sleep(400);
+  }
+
+  return found.slice(0, 6);
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export async function analyzeMarket(

@@ -4,6 +4,7 @@ import { fetchPage, fetchRenderedPage } from "./fetcher";
 import { parseAliExpress, applyAliExpressCompliancePopup } from "./aliexpress";
 import { parseGenericPage, makeProductFromGeneric } from "./generic";
 import { searchManufacturer } from "./manufacturer";
+import { findProductContacts } from "./market";
 import { extractProductWithLLM } from "./llm";
 import { extractEmails } from "@/lib/utils";
 
@@ -103,7 +104,28 @@ export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult>
     }
   }
 
-  // 5) Fallback: si no hay nada util, informar
+  // 5) Buscar contactos del fabricante en internet (nombre del producto o
+  //     fabricante) si aun no hay ningun contacto con email. Muy util cuando
+  //     AliExpress bloquea la info de conformidad (p.ej. desde servidores cloud).
+  const hasContactEmail = (parsed.contacts || []).some((c) => c.email);
+  if (!hasContactEmail) {
+    const searchName2 = parsed.manufacturer_name || parsed.seller_name || parsed.name;
+    if (searchName2 && searchName2.length > 4) {
+      try {
+        const internetContacts = await findProductContacts(searchName2);
+        for (const c of internetContacts) {
+          const dup = (parsed.contacts || []).some(
+            (p) => (c.email && p.email === c.email) || (c.website && p.website === c.website)
+          );
+          if (!dup) (parsed.contacts ||= []).push(c);
+        }
+      } catch {
+        // no es critico
+      }
+    }
+  }
+
+  // 6) Fallback: si no hay nada util, informar
   const hasData = Boolean(
     parsed.name ||
       parsed.seller_name ||
