@@ -8,6 +8,7 @@ interface MarketResult {
   competitorCount: number;
   marketplaces: string[];
   retailPriceRange: string;
+  retailPriceEur: number | null;
   costPriceEur: number | null;
   marginEur: number | null;
   marginPct: number | null;
