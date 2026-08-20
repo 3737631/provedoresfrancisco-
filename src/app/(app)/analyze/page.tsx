@@ -123,7 +123,7 @@ export default function AnalyzePage() {
         {loading && (
           <div className="mt-4 flex items-center gap-3 text-sm text-slate-500">
             <span className="w-4 h-4 border-2 border-brand-200 border-t-brand-600 rounded-full animate-spin" />
-            Buscando el producto y calculando beneficios (tarda ~1 min)…
+            Buscando el producto y calculando beneficios (unos 20 segundos)…
           </div>
         )}
         {error && <div className="mt-4 text-sm text-rose-600">{error}</div>}

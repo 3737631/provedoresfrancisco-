@@ -121,7 +121,7 @@ export async function fetchPage(url: string): Promise<FetchResult | null> {
   if (direct) return direct;
 
   // 2) Vuelta a intentar con espera (algunos sitios bloquean la 1a request)
-  await sleep(1200);
+  await sleep(400);
   const direct2 = await tryDirect(url);
   if (direct2) return direct2;
 

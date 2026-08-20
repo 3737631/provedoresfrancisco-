@@ -34,7 +34,7 @@ async function duckDuckGo(query: string): Promise<SearchHit[]> {
   try {
     const res = await fetch(
       `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
-      { headers: { "User-Agent": UA, Accept: "text/html" } }
+      { headers: { "User-Agent": UA, Accept: "text/html" }, signal: AbortSignal.timeout(6000) }
     );
     if (!res.ok) return [];
     const html = await res.text();
@@ -88,6 +88,7 @@ async function bingSearch(query: string): Promise<SearchHit[]> {
           "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
           Accept: "text/html",
         },
+        signal: AbortSignal.timeout(8000),
       }
     );
     if (!res.ok) return [];
@@ -112,7 +113,6 @@ async function bingSearch(query: string): Promise<SearchHit[]> {
 export async function searchEngine(query: string): Promise<SearchHit[]> {
   const ddg = await duckDuckGo(query);
   if (ddg.length > 0) return ddg;
-  await sleep(300);
   return bingSearch(query);
 }
 
@@ -143,10 +143,8 @@ export async function findProductContacts(productName: string): Promise<Contact[
   if (!name || name.length < 5) return [];
 
   const queries = [
-    `"${name}" manufacturer company email`,
-    `"${name}" supplier contact email`,
-    `"${name}" dropshipping supplier company`,
-    `"${name}" buy wholesale manufacturer`,
+    `"${name}" manufacturer email`,
+    `"${name}" supplier contact`,
   ];
 
   const found: Contact[] = [];
@@ -190,7 +188,6 @@ export async function findProductContacts(productName: string): Promise<Contact[
       if (found.length >= 4) break;
     }
     if (found.length >= 4) break;
-    await sleep(400);
   }
 
   return found.slice(0, 6);
@@ -270,14 +267,9 @@ export async function analyzeMarket(
   const kw = keywordQuery(name);
   const queries = [
     `"${name}" price buy`,
-    `"${name}" precio comprar`,
-    `"${name}" amazon price`,
     `"${name}" shopify`,
-    `"${name}" myshopify.com`,
-    `"${kw}" price shopify`,
-    `"${kw}" buy online precio`,
-    `"${name}" wholesale price`,
-    `"${name}" competitors dropshipping`,
+    `"${kw}" price shopify buy`,
+    `"${name}" amazon price`,
   ];
 
   const prices: number[] = [];
@@ -305,7 +297,6 @@ export async function analyzeMarket(
       const p = extractPrice(txt);
       if (p && p > 0.5 && p < 20000) prices.push(p);
     }
-    await sleep(500);
   }
 
   // Precios REALES navegando a tiendas Shopify/productos encontrados
