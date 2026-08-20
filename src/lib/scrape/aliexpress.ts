@@ -280,6 +280,17 @@ function extractVariants($: cheerio.CheerioAPI): Array<{ name?: string; price?: 
   return variants.slice(0, 20);
 }
 
+function cleanPriceText(s: string): string {
+  const t = s.replace(/\s+/g, " ").trim();
+  // "2,49€", "€ 2,49", "$12.99" o con el simbolo despues
+  const m = t.match(/([€$£¥])\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)|(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)\s*([€$£¥])/);
+  if (m) {
+    if (m[1]) return `${m[1]}${m[2]}`;
+    return `${m[3]}${m[4]}`;
+  }
+  return t.slice(0, 60);
+}
+
 function extractPrice($: cheerio.CheerioAPI): string {
   const sels = [
     ".price--currentPriceText--V8_y_b5",
@@ -290,11 +301,11 @@ function extractPrice($: cheerio.CheerioAPI): string {
   ];
   for (const sel of sels) {
     const t = cleanText($(sel).first().text());
-    if (t && /\d/.test(t)) return t;
+    if (t && /\d/.test(t)) return cleanPriceText(t);
   }
   // meta
   const meta = $('meta[property="product:price:amount"]').attr("content");
-  if (meta) return cleanText(meta);
+  if (meta) return cleanPriceText(meta);
   return "";
 }
 
@@ -444,6 +455,7 @@ export function parseAliExpress(html: string, url: string): ExtractedProduct {
   if (euMatch) result.eu_responsible = cleanText(euMatch[0]);
 
   // ---- Variantes / precio / envio (fallbacks por selectores) ----
+  if (result.price) result.price = cleanPriceText(result.price);
   if (!result.price) result.price = extractPrice($);
   if (!result.shipping_info) result.shipping_info = extractShipping($);
   if (!result.variants || result.variants.length === 0) result.variants = extractVariants($);
@@ -520,4 +532,124 @@ export function parseAliExpress(html: string, url: string): ExtractedProduct {
   }
 
   return result;
+}
+
+// ============================================================
+//  Informacion de conformidad del producto (popup oficial).
+//  La API mtop.aliexpress.pdp.pc.query incluye un popup
+//  "product_compliance_information" con HTML tipo:
+//    <p><strong>Informacion del fabricante</strong><br>
+//      Nombre:X<br>Direccion:Y<br>Email:Z<br>Telefono:P<br>
+//    <p><strong>Informacion sobre la persona responsable en la UE</strong><br>
+//      Nombre:W<br>Direccion:V<br>Email:U<br>Telefono:T
+// ============================================================
+
+interface ComplianceSection {
+  type: "fabricante" | "eu_responsible";
+  name?: string;
+  address?: string;
+  email?: string;
+  phone?: string;
+}
+
+export function parseCompliancePopup(popText: string): ComplianceSection[] {
+  const $ = cheerio.load(`<div>${popText}</div>`);
+  $("br").replaceWith("\n");
+  $("p").append("\n");
+  const text = $.text().replace(/&nbsp;/g, " ");
+  const lines = text
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  const out: ComplianceSection[] = [];
+  let cur: ComplianceSection | null = null;
+  for (const line of lines) {
+    if (/informaci[oó]n del fabricante|manufacturer information/i.test(line)) {
+      cur = { type: "fabricante" };
+      out.push(cur);
+      continue;
+    }
+    if (/persona responsable en la ue|responsable.*ue|eu responsible|importador/i.test(line)) {
+      cur = { type: "eu_responsible" };
+      out.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    const field =
+      line.match(/^nombre\s*:\s*(.+)$/i) ||
+      line.match(/^direcci[oó]n\s*:\s*(.+)$/i) ||
+      line.match(/^email\s*:\s*(.+)$/i) ||
+      line.match(/^tel[ée]fono\s*:\s*(.+)$/i);
+    if (field) {
+      const v = cleanText(field[1]);
+      if (!v) continue;
+      if (/^nombre/i.test(line)) cur.name = v;
+      else if (/^direcci/i.test(line)) cur.address = v;
+      else if (/^email/i.test(line)) cur.email = v;
+      else cur.phone = v;
+    } else if (cur.name && !cur.address && line.length < 260) {
+      cur.address = cleanText(line);
+    }
+  }
+  return out;
+}
+
+// Aplica la informacion de conformidad del popup sobre el resultado extraido.
+export function applyAliExpressCompliancePopup(result: ExtractedProduct, popText: string) {
+  const sections = parseCompliancePopup(popText);
+  if (sections.length === 0) return;
+
+  const mfg = sections.find((s) => s.type === "fabricante");
+  const eu = sections.find((s) => s.type === "eu_responsible");
+
+  const pushContact = (
+    type: "fabricante" | "eu_responsible",
+    company: string | undefined,
+    email: string | undefined,
+    phone: string | undefined,
+    address: string | undefined
+  ) => {
+    if (!company && !email) return;
+    const dup = (result.contacts || []).some((c) => c.email && email && c.email === email);
+    if (dup) return;
+    (result.contacts ||= []).push({
+      company,
+      contact_type: type,
+      email,
+      phone,
+      address,
+      source: "Información sobre conformidad del producto (AliExpress)",
+      confidence: email ? ("alta" as const) : ("media" as const),
+    });
+  };
+
+  if (mfg) {
+    // La informacion oficial de conformidad es la fuente autoritativa:
+    // sobrescribe cualquier placeholder (nombre de tienda) y rellena los vacios.
+    if (mfg.name) result.manufacturer_name = mfg.name;
+    if (mfg.address) result.manufacturer_address = mfg.address;
+    if (mfg.email) result.manufacturer_email = mfg.email;
+    if (mfg.phone) result.manufacturer_phone = mfg.phone;
+    // quitar fabricantes debiles (sin email) que eran solo el nombre de la tienda
+    if (result.contacts) {
+      result.contacts = result.contacts.filter((c) => !(c.contact_type === "fabricante" && !c.email));
+    }
+    if ((result.compliance_contacts || []).length === 0) {
+      result.compliance_contacts = [
+        {
+          company: mfg.name,
+          contact_type: "fabricante" as const,
+          email: mfg.email,
+          phone: mfg.phone,
+          address: mfg.address,
+        },
+      ];
+    }
+    pushContact("fabricante", mfg.name, mfg.email, mfg.phone, mfg.address);
+  }
+  if (eu) {
+    if (!result.eu_responsible && eu.name) result.eu_responsible = eu.name;
+    pushContact("eu_responsible", eu.name, eu.email, eu.phone, eu.address);
+  }
 }

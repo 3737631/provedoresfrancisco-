@@ -13,6 +13,7 @@ export interface Contact {
   email?: string;
   website?: string;
   phone?: string;
+  address?: string;
   source?: string;
   confidence?: Confidence;
   metadata?: Record<string, unknown>;

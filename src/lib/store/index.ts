@@ -317,6 +317,7 @@ export const store = {
       contact_id: data.contact_id ?? null,
       supplier_id: data.supplier_id ?? null,
       to_email: data.to_email ?? null,
+      to_company: data.to_company ?? null,
       subject: data.subject ?? "",
       body: data.body ?? "",
       status: data.status || "draft",

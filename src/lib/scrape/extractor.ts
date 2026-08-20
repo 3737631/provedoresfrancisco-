@@ -1,7 +1,7 @@
 import type { AnalysisResult, ExtractedProduct } from "@/lib/types";
 import { isAliExpressUrl, normalizeUrl, extractAliExpressId } from "@/lib/utils";
 import { fetchPage, fetchRenderedPage } from "./fetcher";
-import { parseAliExpress } from "./aliexpress";
+import { parseAliExpress, applyAliExpressCompliancePopup } from "./aliexpress";
 import { parseGenericPage, makeProductFromGeneric } from "./generic";
 import { searchManufacturer } from "./manufacturer";
 import { extractProductWithLLM } from "./llm";
@@ -51,6 +51,13 @@ export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult>
   }
   parsed.extraction_method = fetched.method === "jina" ? `${parsed.extraction_method}+jina` : parsed.extraction_method;
 
+  // 2a) AliExpress: la informacion de conformidad (fabricante, email,
+  //     direccion, responsable UE) llega por la API mtop capturada por el
+  //     navegador; aplicarla sobre el resultado.
+  if (isAliExpressUrl(url) && fetched.extra?.aliexpress_compliance) {
+    applyAliExpressCompliancePopup(parsed, fetched.extra.aliexpress_compliance);
+  }
+
   // 2b) AliExpress: si el HTML inicial no trajo vendedor/conformidad (carga
   //     por JavaScript), renderizar con un navegador real y fusionar.
   const thinAliExpress =
@@ -63,6 +70,9 @@ export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult>
     const rendered = await fetchRenderedPage(url);
     if (rendered) {
       const rich = parseAliExpress(rendered.html, rendered.finalUrl || url);
+      if (rendered.extra?.aliexpress_compliance) {
+        applyAliExpressCompliancePopup(rich, rendered.extra.aliexpress_compliance);
+      }
       mergeParse(parsed, rich);
       parsed.extraction_method = `${parsed.extraction_method}+browser`;
       if (!parsed.seller_name && rich.seller_name) parsed.seller_name = rich.seller_name;

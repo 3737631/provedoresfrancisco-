@@ -13,6 +13,7 @@ interface FetchResult {
   html: string;
   method: string;
   finalUrl?: string;
+  extra?: Record<string, string>;
 }
 
 const UA =
@@ -132,6 +133,21 @@ async function tryBrowser(url: string): Promise<FetchResult | null> {
       const page = await browser.newPage();
       await page.setUserAgent(UA);
       await page.setExtraHTTPHeaders({ "Accept-Language": "es-ES,es;q=0.9" });
+
+      // Capturar la API interna de AliExpress que trae la informacion de
+      // conformidad del producto (fabricante, direccion, email, telefono).
+      const mtopBodies: string[] = [];
+      page.on("response", async (res) => {
+        try {
+          const u = res.url();
+          if (u.length > 4000 || !u.includes("mtop.aliexpress.pdp.pc.query")) return;
+          const body = await res.text();
+          if (body.length > 200 && body.length < 4000000) mtopBodies.push(body);
+        } catch {
+          /* ignorar */
+        }
+      });
+
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 60000);
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
@@ -173,13 +189,51 @@ async function tryBrowser(url: string): Promise<FetchResult | null> {
 
       const html = await page.content();
       if (!html || html.length < 400) return null;
-      return { html, method: "browser", finalUrl: page.url() };
+
+      const extra: Record<string, string> = {};
+      for (const body of mtopBodies) {
+        const popText = extractAliExpressCompliancePopText(body);
+        if (popText) {
+          extra.aliexpress_compliance = popText;
+          break;
+        }
+      }
+
+      return { html, method: "browser", finalUrl: page.url(), ...(Object.keys(extra).length ? { extra } : {}) };
     } finally {
       await browser.close().catch(() => {});
     }
   } catch {
     return null;
   }
+}
+
+// La API mtop.aliexpress.pdp.pc.query devuelve (JSONP) el popup
+// "product_compliance_information" con la informacion de conformidad:
+// fabricante (nombre/direccion/email/telefono) y responsable en la UE.
+function extractAliExpressCompliancePopText(jsonp: string): string | null {
+  const m = jsonp.match(/^[^(]+\((.*)\)\s*;?\s*$/s);
+  if (!m) return null;
+  let json: unknown;
+  try {
+    json = JSON.parse(m[1]);
+  } catch {
+    return null;
+  }
+  const popup = findPopupById(json, "product_compliance_information");
+  if (!popup || typeof popup.popText !== "string") return null;
+  return popup.popText;
+}
+
+function findPopupById(obj: unknown, id: string): { popText?: unknown } | null {
+  if (!obj || typeof obj !== "object") return null;
+  const rec = obj as Record<string, unknown>;
+  if (typeof rec.popId === "string" && rec.popId === id) return rec as { popText?: unknown };
+  for (const key of Object.keys(rec)) {
+    const found = findPopupById(rec[key], id);
+    if (found) return found;
+  }
+  return null;
 }
 
 function fsExists(p: string): boolean {

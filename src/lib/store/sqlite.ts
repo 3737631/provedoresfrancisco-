@@ -98,6 +98,7 @@ function migrate(d: DatabaseSync) {
       contact_id TEXT,
       supplier_id TEXT,
       to_email TEXT,
+      to_company TEXT,
       subject TEXT,
       body TEXT,
       status TEXT NOT NULL DEFAULT 'draft',
@@ -145,6 +146,13 @@ function migrate(d: DatabaseSync) {
       created_at TEXT NOT NULL
     );
   `);
+
+  // Migracion: columna to_company en emails (bases ya creadas)
+  try {
+    d.exec("ALTER TABLE emails ADD COLUMN to_company TEXT");
+  } catch {
+    /* la columna ya existe */
+  }
 }
 
 export const now = () => new Date().toISOString();

@@ -107,6 +107,7 @@ export async function POST(req: NextRequest) {
         contact_id: best.id || null,
         supplier_id: supplier.id,
         to_email: best.email || null,
+        to_company: company,
         subject: generated.subject,
         body: generated.body,
         status: "draft",
