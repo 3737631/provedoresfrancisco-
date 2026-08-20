@@ -15,12 +15,27 @@ import { extractEmails } from "@/lib/utils";
 
 // Los enlaces "bundle"/"ssr" de AliExpress (p.ej. /ssr/300000512/BundleDeals...)
 // no tienen nombre de producto; se reescriben a la pagina canonica del item.
+// Se usa www.aliexpress.com porque es el dominio que mejor responde desde
+// servidores cloud (es/us/pt suelen responder con captcha).
 export function normalizeAliExpressUrl(url: string): string {
   const m = url.match(/productIds?=(\d+)/);
   if (m && /\/ssr\//i.test(url)) {
-    return `https://es.aliexpress.com/item/${m[1]}.html`;
+    return `https://www.aliexpress.com/item/${m[1]}.html`;
   }
   return url;
+}
+
+// Variantes de la misma URL de AliExpress con otros subdominios, para
+// reintentar cuando un host responde con captcha (varia por IP/origen).
+function aliExpressAlternates(url: string): string[] {
+  const m = url.match(/(?:item|product)\/(\d+)\.html/i);
+  if (!m) return [];
+  return [
+    `https://www.aliexpress.com/item/${m[1]}.html`,
+    `https://es.aliexpress.com/item/${m[1]}.html`,
+    `https://us.aliexpress.com/item/${m[1]}.html`,
+    `https://pt.aliexpress.com/item/${m[1]}.html`,
+  ];
 }
 
 export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult> {
@@ -42,8 +57,18 @@ export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult>
     warnings: [],
   };
 
-  // 1) Intentar descargar la pagina
-  const fetched = await fetchPage(url);
+  // 1) Intentar descargar la pagina (varios subdominios de AliExpress en
+  //     cascada: algunos responden con captcha segun la IP del servidor)
+  let fetched: Awaited<ReturnType<typeof fetchPage>> | null = null;
+  let fetchUrl = url;
+  const candidates = isAliExpressUrl(url) ? [url, ...aliExpressAlternates(url)] : [url];
+  for (const u of candidates) {
+    fetched = await fetchPage(u);
+    if (fetched) {
+      fetchUrl = u;
+      break;
+    }
+  }
   if (!fetched) {
     const msg =
       "La pagina no pudo ser descargada automaticamente (bloqueo anti-bot o enlace no publico). Puedes introducir los datos manualmente.";
@@ -54,11 +79,12 @@ export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult>
 
   // 2) Parsear segun la plataforma
   let parsed: ExtractedProduct;
+  const parseUrl = fetched.finalUrl || fetchUrl;
   if (isAliExpressUrl(url)) {
-    parsed = parseAliExpress(fetched.html, url);
+    parsed = parseAliExpress(fetched.html, parseUrl);
   } else {
-    const generic = parseGenericPage(fetched.html, url);
-    parsed = makeProductFromGeneric(url, generic);
+    const generic = parseGenericPage(fetched.html, parseUrl);
+    parsed = makeProductFromGeneric(parseUrl, generic);
   }
   parsed.extraction_method = fetched.method === "jina" ? `${parsed.extraction_method}+jina` : parsed.extraction_method;
 
@@ -78,7 +104,7 @@ export async function analyzeProductUrl(rawUrl: string): Promise<AnalysisResult>
     !parsed.manufacturer_name &&
     !(parsed.contacts && parsed.contacts.length > 0);
   if (thinAliExpress) {
-    const rendered = await fetchRenderedPage(url);
+    const rendered = await fetchRenderedPage(fetchUrl);
     if (rendered) {
       const rich = parseAliExpress(rendered.html, rendered.finalUrl || url);
       if (rendered.extra?.aliexpress_compliance) {
