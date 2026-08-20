@@ -230,6 +230,22 @@ async function fetchShopifyPrice(url: string): Promise<number | null> {
   }
 }
 
+// Palabras clave cortas a partir del nombre (los nombres de AliExpress son muy
+// largos y especificos; los buscadores responden mejor a 3-5 palabras clave).
+function keywordQuery(name: string): string {
+  const stop = new Set([
+    "for", "the", "and", "with", "from", "para", "con", "table", "station",
+    "brand", "bracket", "bending", "standing", "display", "programmable",
+    "resistente", "antiguo", "nuevo", "portable", "compact", "mini",
+  ]);
+  const words = name
+    .replace(/[^\p{L}\p{N} ]/gu, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !stop.has(w.toLowerCase()) && !/^\d+$/.test(w));
+  const top = [...new Set(words)].sort((a, b) => b.length - a.length).slice(0, 4);
+  return top.join(" ") || name.slice(0, 40);
+}
+
 export async function analyzeMarket(
   productName: string,
   costPriceEur: number | null
@@ -251,12 +267,15 @@ export async function analyzeMarket(
     return empty;
   }
 
+  const kw = keywordQuery(name);
   const queries = [
     `"${name}" price buy`,
     `"${name}" precio comprar`,
     `"${name}" amazon price`,
     `"${name}" shopify`,
     `"${name}" myshopify.com`,
+    `"${kw}" price shopify`,
+    `"${kw}" buy online precio`,
     `"${name}" wholesale price`,
     `"${name}" competitors dropshipping`,
   ];

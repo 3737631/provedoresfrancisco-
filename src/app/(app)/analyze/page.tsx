@@ -274,6 +274,38 @@ export default function AnalyzePage() {
                   </li>
                 ))}
               </ul>
+
+              {!market.retailPriceEur && a.name && (
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <span className="text-sm text-slate-500">
+                    No lo encontró a la venta: búscalo tú para ver el valor:
+                  </span>
+                  <a
+                    href={`https://www.google.com/search?q=${encodeURIComponent(a.name + " buy")}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn text-sm px-3 py-1.5"
+                  >
+                    Buscar en Google
+                  </a>
+                  <a
+                    href={`https://www.bing.com/search?q=${encodeURIComponent(a.name + " site:myshopify.com OR /products/")}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn text-sm px-3 py-1.5"
+                  >
+                    Buscar en Shopify
+                  </a>
+                  <a
+                    href={`https://www.amazon.es/s?k=${encodeURIComponent(a.name)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn text-sm px-3 py-1.5"
+                  >
+                    Amazon
+                  </a>
+                </div>
+              )}
             </section>
           )}
         </div>
